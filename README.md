@@ -1,5 +1,4 @@
 # FoundryStudio
-# Foundry Studio
 
 Design GitHub-ready animated SVGs in stacked capsules. Everything you export, you own.<br>
 [**Try it live**](https://luigalve.github.io/FoundryStudio/) | [View the source](https://github.com/luigalve/FoundryStudio/blob/main/index.html)
