@@ -4,6 +4,9 @@ Design GitHub-ready animated SVGs in stacked capsules. Everything you export, yo
 [**Try it live**](https://luigalve.github.io/FoundryStudio/) | [View the source](https://github.com/luigalve/FoundryStudio/blob/main/index.html)
 <br>
 <br>
+![Alt Text](images/FoundryStudio-dashboard.png)
+
+<br>
 
 ## Table of Contents
 
