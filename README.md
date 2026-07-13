@@ -1,6 +1,6 @@
 # FoundryStudio
-
 Design GitHub-ready animated SVGs in stacked capsules. Everything you export, you own.<br>
+
 [**Try it live**](https://luigalve.github.io/FoundryStudio/) | [View the source](https://github.com/luigalve/FoundryStudio/blob/main/index.html)
 <br>
 <br>
@@ -21,6 +21,10 @@ Design GitHub-ready animated SVGs in stacked capsules. Everything you export, yo
 - [Keys](#keys)
 - [Seven things the buttons do not tell you](#seven-things-the-buttons-do-not-tell-you)
 - [License](#license)
+
+<br>
+<br>
+  
 
 One HTML file. Open it in a browser and you have a visual editor: shapes, text, entrance and exit animations, travelling cuts, alignment guides, undo. Download the result as a self-contained SVG and commit it. No install, no build step, no npm, no account.
 
