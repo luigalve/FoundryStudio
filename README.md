@@ -5,6 +5,14 @@ Design GitHub-ready animated SVGs in stacked capsules. Everything you export, yo
 <br>
 <br>
 ![Alt Text](images/FoundryStudio-intro-Capsule.svg)
+<br>
+
+
+**Helpful Probe**<br>
+![Alt Text](images/foundry-probe.svg)
+<br>
+Six rows, each testing one mechanism.<br>
+Grey labels never animate. A blank row means the mechanism failed and not the file.
 
 <br>
 
