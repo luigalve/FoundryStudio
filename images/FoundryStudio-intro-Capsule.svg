@@ -1,0 +1,34 @@
+<svg viewBox="0 0 760 200" width="760" height="200" xmlns="http://www.w3.org/2000/svg" role="img">
+<!-- Made with Foundry Studio. Self-contained: no scripts, no
+     external requests. Safe to commit and reference forever. -->
+<style>
+.e0_0{transform-box:fill-box;transform-origin:center;animation:ai0_0 0.8s ease 0s 1 both,ao0_0 0.8s ease 3s forwards}
+@keyframes ai0_0{from{transform:translateX(-50px);opacity:0}to{transform:none;opacity:1}}
+@keyframes ao0_0{to{opacity:0}}
+
+.t0_1{animation:ti0_1 0.5s steps(5,end) 0.5s both,to0_1 0.6s steps(5,end) 3s forwards}
+@keyframes ti0_1{from{width:0}to{width:80px}}
+@keyframes to0_1{from{width:80px}to{width:0}}
+
+.e0_2{stroke-dasharray:1}
+.e0_2{transform-box:fill-box;transform-origin:center;animation:ai0_2 1s ease 1.2s 1 both,ao0_2 0.8s ease 3s forwards}
+@keyframes ai0_2{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+@keyframes ao0_2{to{transform:translateX(60px);opacity:0}}
+
+.e0_3{transform-box:fill-box;transform-origin:center;animation:ai0_3 0.8s ease 1.8s 1 both,ao0_3 0.8s ease 3s forwards}
+@keyframes ai0_3{from{opacity:0}to{opacity:1}}
+@keyframes ao0_3{to{transform:translateY(-50px);opacity:0}}
+
+.e0_4{transform-box:fill-box;transform-origin:center;animation:ai0_4 0.6s ease 2.1s 1 both,ao0_4 1s ease 3.2s forwards}
+@keyframes ai0_4{0%{transform:translateY(-60px);opacity:0}60%{transform:translateY(8px);opacity:1}80%{transform:translateY(-4px)}100%{transform:none;opacity:1}}
+@keyframes ao0_4{0%{transform:none}30%{transform:translateY(-12px)}100%{transform:translateY(60px);opacity:0}}
+
+@media(prefers-reduced-motion:reduce){*{animation:none !important}}
+</style>
+<defs><clipPath id="t0_1clip"><rect class="t0_1" x="66" y="84" width="0" height="36.4"/></clipPath><mask id="m0_3"><rect x="-1476" y="-1940" width="4000" height="4000" fill="white"/><ellipse cx="644" cy="70" rx="50" ry="35" fill="black"/></mask></defs>
+  <rect x="39" y="70" width="180" height="56" rx="28" class="e0_0" fill="#21262d" stroke="#00000000" stroke-width="0" opacity="1"/>
+  <text x="66" y="110" font-size="26" font-weight="600" font-family="ui-monospace,Menlo,Consolas,monospace" class="e0_1" fill="#f778ba" stroke="#00000000" stroke-width="0" opacity="1" clip-path="url(#t0_1clip)">hello</text>
+  <line x1="260" y1="98" x2="440" y2="98" class="e0_2" fill="#00000000" stroke="#f778ba" stroke-width="3" opacity="1" pathLength="1"/>
+  <rect x="524" y="60" width="120" height="80" rx="8" class="e0_3" fill="#58a6ff" stroke="#00000000" stroke-width="0" opacity="1" mask="url(#m0_3)"/>
+  <ellipse cx="705" cy="100" rx="25" ry="25" class="e0_4" fill="#f778ba" stroke="#00000000" stroke-width="0" opacity="1"/>
+</svg>
