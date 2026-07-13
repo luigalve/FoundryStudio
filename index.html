@@ -1,0 +1,1242 @@
+<!doctype html>
+<!--
+  ============================================================
+  Foundry Studio (v4)
+  A single-file, offline visual designer for GitHub-ready SVGs.
+  ============================================================
+
+  NEW IN v4
+    EXIT = FULL SLOT - the Exit dropdown now carries everything
+        Entrance has: all the outs, all the loops (with their
+        own iteration count), and "undraw" (draw stroke in
+        reverse). Fade in, then wobble forever? One element.
+    MULTI MOVE/RESIZE - a multi-selection drags as one, and has
+        a single corner handle that scales the whole selection
+        proportionally. (Rotation is ignored during group
+        resize; resize rotated shapes individually.)
+    ALT+CLICK CYCLING - clicking through a stack of shapes now
+        only happens while Alt is held; a plain click always
+        selects the top shape. (v3's always-cycle slowed real
+        work, per field report.)
+    SHORTCUTS - editable single-key bindings for the workflow
+        buttons, shown greyed next to each button. They only
+        fire when you are not typing in a field, so they can
+        never eat text input. Arrow keys nudge the selection
+        1px, Shift+Arrow 10px. The Shortcuts panel lists every
+        binding, marks tap vs hold, and lets you retype the key
+        to change it. Bindings save inside project.json.
+    GUIDES - toggleable alignment lines: while dragging, the
+        selection snaps to the canvas center and to other
+        shapes' centers when within 5px, with pink guide lines
+        showing what it snapped to.
+    LAYOUT - Flip layout swaps the canvas column and the panel
+        column. The four panel sections can be reordered inside
+        their 2x2 grid with the arrows in each section header.
+        Export moved to the top bar (it kept getting pushed
+        below the fold by new capsules). Undo/Redo moved into
+        the panel grid ("COMBINE + HISTORY"). Show hidden lives
+        next to Hide. Multi-select gains +exit delay and +exit
+        duration.
+
+  BUGS FIXED (v3 field testing)
+    1. One capsule's Anim toggle froze ALL capsules. Cause
+       worth remembering: a <style> element inside an inline
+       SVG is NOT scoped to that SVG - it applies to the whole
+       document. The per-element rules never collided because
+       their class names carry the capsule index, but the
+       animation-off rule was a bare * wildcard. It is now
+       scoped to its own svg[data-cap] selector.
+    2. Text ignored transform exits (zoom out etc). Cause: text
+       with a typing entrance took an early code path that only
+       understood "untype" and silently dropped other exits.
+       animCSS now builds clip rules and node rules
+       independently, so text can type in AND zoom out.
+    3. Undo/redo dropped the selection highlight. Snapshots now
+       store the selection alongside the state and restore it.
+
+  HOW BITE WORKS / ROTATION MODEL / UNDO MODEL: unchanged from
+  v3; see rotPt(), elSVG(), snap(). Bites are masks (fills
+  perfect, strokes do not trace the cut). Rotation lives on a
+  wrapper <g> so CSS transform animations cannot overwrite it.
+  Undo restores whole-project snapshots.
+
+  CODE MAP
+    STATE     - caps[], ac, selArr[], ui{} (flip/order/keymap/
+                guides), undo stacks
+    GEOMETRY  - geom(), rotPt(), hit()
+    ANIM      - animCSS(): entrance + exit slots, loops both
+    RENDER    - rebuildAll() / paintCanvas(c) / applyUI()
+    POINTER   - marquee, multi-move, multi-resize, guides,
+                Alt+click stack cycling
+    SHORTCUTS - ACTIONS table, keydown dispatcher, editor panel
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foundry Studio</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d;
+    --text:#e6edf3; --muted:#9198a1; --accent:#f778ba;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif}
+  header.app{padding:14px 20px;border-bottom:1px solid var(--border);
+    display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header.app h1{margin:0;font:700 18px var(--mono)}
+  header.app h1 span{color:var(--accent)}
+  header.app p{margin:0;color:var(--muted);font-size:12.5px}
+  main{display:grid;grid-template-columns:1fr 640px;min-height:calc(100vh - 56px)}
+  main.flip{grid-template-columns:640px 1fr}
+  main.flip #props{order:-1;border-left:none;border-right:1px solid var(--border)}
+  @media(max-width:1250px){main{grid-template-columns:1fr 320px}
+    main.flip{grid-template-columns:320px 1fr}}
+  @media(max-width:900px){main,main.flip{grid-template-columns:1fr}
+    main.flip #props{order:0}}
+
+  #workwrap{padding:16px 20px;overflow:auto}
+  .bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+  .bar span{font:600 11px var(--mono);color:var(--muted);margin-right:2px}
+  button{background:var(--panel);color:var(--text);border:1px solid var(--border);
+    border-radius:6px;padding:6px 10px;font:600 12px var(--mono);cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  kbd{font:600 10px var(--mono);color:var(--muted);border:1px solid var(--border);
+    border-radius:4px;padding:1px 4px;margin-left:5px;opacity:.75}
+  input[type=number]{width:58px;background:var(--bg);color:var(--text);
+    border:1px solid var(--border);border-radius:6px;padding:5px 7px;
+    font:12px var(--mono)}
+  input[type=text],select{background:var(--bg);color:var(--text);
+    border:1px solid var(--border);border-radius:6px;padding:5px 7px;
+    font:12px var(--mono)}
+  input[type=color]{width:32px;height:26px;padding:0;border:1px solid
+    var(--border);border-radius:6px;background:none;cursor:pointer;
+    vertical-align:middle}
+  .hex{width:72px !important}
+  .keybox{width:44px !important;text-align:center}
+
+  .cap{margin-bottom:18px}
+  .caphead{display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+    padding:6px 8px;background:var(--panel);border:1px solid var(--border);
+    border-bottom:none;border-radius:8px 8px 0 0}
+  .caphead b{font:600 12px var(--mono);color:var(--muted);margin-right:auto}
+  .cap svg{display:block;border:1px dashed var(--border);
+    border-radius:0 0 8px 8px;background:#0d1117;touch-action:none}
+  .cap.active svg{border-color:var(--accent)}
+  .cap.active .caphead b{color:var(--accent)}
+  #stages.light .cap svg{background:#ffffff}
+
+  #props{border-left:1px solid var(--border);padding:16px;overflow-y:auto}
+  #props h2{font:600 12px var(--mono);color:var(--accent);
+    letter-spacing:.05em;margin:0 0 10px;display:flex;align-items:center;gap:6px}
+  #props h2 .secmove{margin-left:auto;display:flex;gap:4px}
+  #props h2 .secmove button{padding:2px 7px;font-size:11px}
+  #fields,#multi{display:none}
+  #fields.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1250px){#fields.grid{grid-template-columns:1fr}}
+  .sect{border:1px solid var(--border);border-radius:8px;
+    background:var(--panel);padding:12px 14px}
+  .prow{display:flex;justify-content:space-between;align-items:center;
+    gap:8px;margin:7px 0;flex-wrap:wrap}
+  .prow label{font-size:12px;color:var(--muted)}
+  .prow .cpair{display:flex;gap:5px;align-items:center}
+  .prow input[type=text].wide,.prow select{width:140px}
+  #noselect{color:var(--muted);font-size:12.5px}
+  .hint{font-size:11px;color:var(--muted)}
+  #exportout{width:100%;height:150px;background:var(--bg);color:var(--muted);
+    border:1px solid var(--border);border-radius:6px;font:11px var(--mono);
+    padding:8px;white-space:pre;overflow:auto;display:none;margin-top:8px}
+  #shortcuts{display:none;border:1px solid var(--border);border-radius:8px;
+    background:var(--panel);padding:12px 14px;margin-bottom:10px;max-width:560px}
+  #shortcuts table{border-collapse:collapse;font-size:12px}
+  #shortcuts td{padding:4px 10px 4px 0;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header class="app">
+  <h1>Foundry <span>Studio</span></h1>
+  <p>Design GitHub-ready animated SVGs in stacked capsules. Everything you export, you own.</p>
+</header>
+
+<main id="maingrid">
+<div id="workwrap">
+
+  <div class="bar">
+    <span>ADD</span>
+    <button data-add="rect">Rectangle</button>
+    <button data-add="pill">Pill</button>
+    <button data-add="ellipse">Ellipse</button>
+    <button data-add="line">Line</button>
+    <button data-add="tri">Triangle</button>
+    <button data-add="text">Text</button>
+    <span style="margin-left:10px">EXPORT</span>
+    <button id="cpmd">Copy README snippet</button>
+    <button id="cpsvg">Copy active SVG</button>
+    <button id="viewsvg">View code</button>
+  </div>
+
+  <div class="bar">
+    <span>PROJECT</span>
+    <button id="addcap" class="primary">Add capsule</button>
+    <button id="bgToggle">Preview: dark</button>
+    <button id="replay">Replay</button>
+    <button id="guidesToggle">Guides: on</button>
+    <button id="flip">Flip layout</button>
+    <button id="shortcutsBtn">Shortcuts</button>
+    <button id="save">Save project (.json)</button>
+    <button id="load">Load project</button>
+    <input type="file" id="loadfile" accept=".json" style="display:none">
+  </div>
+
+  <div id="shortcuts">
+    <h2 style="font:600 12px var(--mono);color:var(--accent);margin:0 0 8px">SHORTCUTS</h2>
+    <p class="hint" style="margin:0 0 8px">Single keys, active only while you are not typing in a field. Click a key box and press a new key to rebind. Saved inside your project file. Arrow keys nudge the selection 1px (Shift = 10px); Ctrl+Z / Ctrl+Y are undo / redo; these are fixed.</p>
+    <table id="sctable"></table>
+  </div>
+
+  <div id="stages"></div>
+  <div class="hint">Drag on empty canvas to marquee-select. Shift-click adds to selection. Hold <b>Alt</b> and click to cycle to the shape underneath. Each capsule downloads from its own header.</div>
+  <pre id="exportout"></pre>
+</div>
+
+<div id="props">
+  <h2>SELECTION</h2>
+  <div id="noselect">Nothing selected. Click or marquee-drag on a canvas.</div>
+
+  <div id="multi">
+    <div class="sect">
+      <h2 id="multicount">0 SELECTED</h2>
+      <div class="prow"><label>+ delay (s)</label>
+        <span class="cpair"><input type="number" id="mDelay" step="0.1" value="1">
+        <button id="mDelayGo">Apply</button></span></div>
+      <div class="prow"><label>+ duration (s)</label>
+        <span class="cpair"><input type="number" id="mDur" step="0.1" value="0.5">
+        <button id="mDurGo">Apply</button></span></div>
+      <div class="prow"><label>+ exit delay (s)</label>
+        <span class="cpair"><input type="number" id="mExDelay" step="0.1" value="1">
+        <button id="mExDelayGo">Apply</button></span></div>
+      <div class="prow"><label>+ exit duration (s)</label>
+        <span class="cpair"><input type="number" id="mExDur" step="0.1" value="0.5">
+        <button id="mExDurGo">Apply</button></span></div>
+      <p class="hint">Each adds to every selected shape's OWN value: a 0.7 / 0.8 / 0.9 stagger +3 becomes 3.7 / 3.8 / 3.9. Values can be negative.</p>
+      <hr style="border:0;border-top:1px solid var(--border)">
+      <div class="prow">
+        <button id="unite">Unite<kbd data-kbd="unite"></kbd></button>
+        <button id="mHide">Hide<kbd data-kbd="hide"></kbd></button>
+        <button id="mDel">Delete<kbd>Del</kbd></button>
+      </div>
+      <p class="hint">Drag moves the whole selection; the pink corner scales it together. Unite makes a compound shape. Text can't join a union.</p>
+    </div>
+  </div>
+
+  <div id="fields" class="grid">
+    <div class="sect" data-sec="element">
+      <h2>ELEMENT <span class="secmove"><button data-secmove="-1">&#9664;</button><button data-secmove="1">&#9654;</button></span></h2>
+      <div class="prow" id="rowText"><label>Text</label><input type="text" class="wide" id="pText"></div>
+      <div class="prow"><label>Fill</label><span class="cpair">
+        <input type="color" id="pFill"><input type="text" class="hex" id="pFillHex"></span></div>
+      <div class="prow"><label>Stroke</label><span class="cpair">
+        <input type="color" id="pStroke"><input type="text" class="hex" id="pStrokeHex"></span></div>
+      <div class="prow"><label>Stroke width</label><input type="number" id="pStrokeW" min="0"></div>
+      <div class="prow" id="rowRx"><label>Corner radius</label><input type="number" id="pRx" min="0"></div>
+      <div class="prow" id="rowFs"><label>Font size</label><input type="number" id="pFs" min="8"></div>
+      <div class="prow"><label>Rotation (deg)</label><input type="number" id="pRot" step="1"></div>
+      <div class="prow"><label>Opacity</label><input type="number" id="pOp" min="0" max="1" step="0.05"></div>
+      <div class="prow">
+        <button id="hideone">Hide<kbd data-kbd="hide"></kbd></button>
+        <button id="showhidden">Show hidden<kbd data-kbd="show"></kbd></button>
+      </div>
+    </div>
+
+    <div class="sect" data-sec="anim">
+      <h2>ANIMATION <span class="secmove"><button data-secmove="-1">&#9664;</button><button data-secmove="1">&#9654;</button></span></h2>
+      <div class="prow"><label>Entrance / loop</label>
+        <select id="pAnim">
+          <option value="none">none</option>
+          <option value="fade">fade in</option>
+          <option value="zoom">zoom in</option>
+          <option value="bounce">bounce in</option>
+          <option value="slide-l">slide from left</option>
+          <option value="slide-r">slide from right</option>
+          <option value="slide-u">slide from top</option>
+          <option value="slide-d">slide from bottom</option>
+          <option value="pulse">pulse (loop)</option>
+          <option value="float">float (loop)</option>
+          <option value="blink">blink (loop)</option>
+          <option value="wobble">wobble (loop)</option>
+          <option value="spin">spin (loop)</option>
+          <option value="hue">hue cycle (loop)</option>
+          <option value="colorpulse">color pulse (loop)</option>
+          <option value="draw">draw stroke</option>
+          <option value="typing">typing (text)</option>
+        </select></div>
+      <div class="prow"><label>Delay (s)</label><input type="number" id="pDelay" min="0" step="0.1"></div>
+      <div class="prow"><label>Duration (s)</label><input type="number" id="pDur" min="0.1" step="0.1"></div>
+      <div class="prow" id="rowIter"><label>Iterations (0 = forever)</label><input type="number" id="pIter" min="0" step="1"></div>
+      <div class="prow"><label>Exit / second</label>
+        <select id="pExit">
+          <option value="none">none</option>
+          <option value="fade">fade out</option>
+          <option value="zoom">zoom out</option>
+          <option value="bounce">bounce out</option>
+          <option value="slide-l">slide out left</option>
+          <option value="slide-r">slide out right</option>
+          <option value="slide-u">slide out top</option>
+          <option value="slide-d">slide out bottom</option>
+          <option value="undraw">undraw stroke</option>
+          <option value="untype">untype (text)</option>
+          <option value="pulse">pulse (loop)</option>
+          <option value="float">float (loop)</option>
+          <option value="blink">blink (loop)</option>
+          <option value="wobble">wobble (loop)</option>
+          <option value="spin">spin (loop)</option>
+          <option value="hue">hue cycle (loop)</option>
+          <option value="colorpulse">color pulse (loop)</option>
+        </select></div>
+      <div class="prow"><label>Exit delay (s)</label><input type="number" id="pExitDelay" min="0" step="0.1"></div>
+      <div class="prow"><label>Exit duration (s)</label><input type="number" id="pExitDur" min="0.1" step="0.1"></div>
+      <div class="prow" id="rowExIter"><label>Exit iterations (0 = forever)</label><input type="number" id="pExitIter" min="0" step="1"></div>
+      <div class="prow" id="rowC2"><label>Second color</label><span class="cpair">
+        <input type="color" id="pC2"><input type="text" class="hex" id="pC2Hex"></span></div>
+    </div>
+
+    <div class="sect" data-sec="combine">
+      <h2>COMBINE + HISTORY <span class="secmove"><button data-secmove="-1">&#9664;</button><button data-secmove="1">&#9654;</button></span></h2>
+      <div class="prow">
+        <button id="bite">Bite<kbd data-kbd="bite"></kbd></button>
+        <button id="unbite">Clear bites<kbd data-kbd="unbite"></kbd></button>
+      </div>
+      <p class="hint">Overlap, Bite, move away: touched shapes keep a travelling cut in this shape's outline. Unite lives in the multi-select panel.</p>
+      <div class="prow">
+        <button id="undo">Undo<kbd>Ctrl+Z</kbd></button>
+        <button id="redo">Redo<kbd>Ctrl+Y</kbd></button>
+      </div>
+    </div>
+
+    <div class="sect" data-sec="arrange">
+      <h2>ARRANGE <span class="secmove"><button data-secmove="-1">&#9664;</button><button data-secmove="1">&#9654;</button></span></h2>
+      <div class="prow">
+        <button id="alignH">Center horiz.<kbd data-kbd="ctrh"></kbd></button>
+        <button id="alignV">Center vert.<kbd data-kbd="ctrv"></kbd></button>
+      </div>
+      <div class="prow">
+        <button id="zUp">Bring forward<kbd data-kbd="fwd"></kbd></button>
+        <button id="zDown">Send back<kbd data-kbd="back"></kbd></button>
+      </div>
+      <div class="prow">
+        <button id="dup">Duplicate<kbd data-kbd="dup"></kbd></button>
+        <button id="del">Delete<kbd>Del</kbd></button>
+      </div>
+      <p class="hint">Drag to move (arrows nudge 1px, Shift+arrows 10px). Pink corner resizes. Text: vertical drag scales the font; width follows the text.</p>
+    </div>
+  </div>
+</div>
+</main>
+
+<script>
+/* ==============================================================
+   STATE
+   ============================================================== */
+let caps = [], ac = 0, selArr = [], nextId = 1;
+let undoStack = [], redoStack = [], lastSnapTag = '', lastSnapTime = 0;
+let ui = { flip:false, guides:true,
+  order:['element','anim','combine','arrange'],
+  keymap:{ bite:'b', unbite:'n', unite:'g', hide:'h', show:'s',
+           dup:'d', fwd:']', back:'[', ctrh:'c', ctrv:'v' } };
+const KEYINFO = [
+  ['bite','Bite','tap'], ['unbite','Clear bites','tap'],
+  ['unite','Unite selection','tap'], ['hide','Hide selected','tap'],
+  ['show','Show hidden','tap'], ['dup','Duplicate','tap'],
+  ['fwd','Bring forward','tap'], ['back','Send back','tap'],
+  ['ctrh','Center horizontally','tap'], ['ctrv','Center vertically','tap'] ];
+const $ = id => document.getElementById(id);
+const stages = $('stages');
+const LOOPS = ['pulse','spin','hue','float','blink','wobble','colorpulse'];
+const BITEABLE = ['rect','pill','ellipse','tri','group'];
+
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                 .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function makeEl(type){
+  const base = { id:nextId++, type, x:60, y:60, w:140, h:60,
+    fill:'#f778ba', stroke:'#00000000', strokeW:0, rx:8, rot:0,
+    opacity:1, anim:'none', delay:0, dur:1, iter:0,
+    exit:'none', exitDelay:3, exitDur:0.8, exitIter:0,
+    color2:'#58a6ff', bites:[], hide:false };
+  if(type==='pill')  base.rx = 999;
+  if(type==='line'){ base.h = 0; base.stroke='#f778ba'; base.strokeW=3; base.fill='#00000000'; }
+  if(type==='tri')   base.w = base.h = 90;
+  if(type==='text'){ base.text='Edit me'; base.fs=26; base.h=32; }
+  if(type==='group') base.parts = [];
+  if(type==='text') fitText(base);
+  return base;
+}
+function makeCap(){ return { w:760, h:200, els:[], anim:true }; }
+function fitText(e){
+  e.stepW = Math.max(1, Math.round(e.fs * 0.62));
+  e.w = Math.max(20, e.stepW * (e.text||' ').length);
+  e.h = Math.round(e.fs * 1.25);
+}
+
+/* ==============================================================
+   GEOMETRY
+   ============================================================== */
+function rotPt(px, py, cx, cy, deg){
+  const r = deg * Math.PI/180, c = Math.cos(r), s = Math.sin(r);
+  const dx = px - cx, dy = py - cy;
+  return { x: cx + dx*c - dy*s, y: cy + dx*s + dy*c };
+}
+function geom(type, x, y, w, h, rx, attrs){
+  switch(type){
+    case 'rect': case 'pill':
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(rx, h/2)}" ${attrs}/>`;
+    case 'ellipse':
+      return `<ellipse cx="${x+w/2}" cy="${y+h/2}" rx="${w/2}" ry="${h/2}" ${attrs}/>`;
+    case 'tri':
+      return `<polygon points="${x+w/2},${y} ${x+w},${y+h} ${x},${y+h}" ${attrs}/>`;
+    case 'line':
+      return `<line x1="${x}" y1="${y}" x2="${x+w}" y2="${y+h}" ${attrs}/>`;
+  }
+}
+function hit(e, px, py){
+  const cx = e.x + e.w/2, cy = e.y + (e.h||0)/2;
+  const p = e.rot ? rotPt(px, py, cx, cy, -e.rot) : {x:px, y:py};
+  const pad = 6 + (e.strokeW||0)/2, h = e.h || 12;
+  return p.x >= e.x-pad && p.x <= e.x+e.w+pad &&
+         p.y >= e.y-pad && p.y <= e.y+h+pad;
+}
+
+/* ==============================================================
+   ANIMATION
+   The two slots (Entrance, Exit) are built independently and
+   joined into one animation list. Both understand loops with
+   iteration counts. Clip animations (typing / untype) live on
+   the clip rect; everything else lives on the element node, so
+   text can type in and STILL zoom out (v3 bug 2 fix).
+   ============================================================== */
+function loopFrames(name, e){
+  switch(name){
+    case 'pulse':   return `0%,100%{transform:scale(1)}50%{transform:scale(1.07)}`;
+    case 'float':   return `0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}`;
+    case 'blink':   return `0%,100%{opacity:${e.opacity}}50%{opacity:0.15}`;
+    case 'wobble':  return `0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}`;
+    case 'spin':    return `from{transform:rotate(0)}to{transform:rotate(360deg)}`;
+    case 'hue':     return `from{filter:hue-rotate(0)}to{filter:hue-rotate(360deg)}`;
+    case 'colorpulse': return `0%,100%{fill:${e.fill}}50%{fill:${e.color2}}`;
+  }
+}
+function entranceFrames(e){
+  if(LOOPS.includes(e.anim)) return loopFrames(e.anim, e);
+  switch(e.anim){
+    case 'fade':    return `from{opacity:0}to{opacity:${e.opacity}}`;
+    case 'zoom':    return `from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:${e.opacity}}`;
+    case 'bounce':  return `0%{transform:translateY(-60px);opacity:0}60%{transform:translateY(8px);opacity:${e.opacity}}80%{transform:translateY(-4px)}100%{transform:none;opacity:${e.opacity}}`;
+    case 'slide-l': return `from{transform:translateX(-50px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
+    case 'slide-r': return `from{transform:translateX(50px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
+    case 'slide-u': return `from{transform:translateY(-40px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
+    case 'slide-d': return `from{transform:translateY(40px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
+    case 'draw':    return `from{stroke-dashoffset:1}to{stroke-dashoffset:0}`;
+  }
+}
+function exitFrames(e){
+  if(LOOPS.includes(e.exit)) return loopFrames(e.exit, e);
+  switch(e.exit){
+    case 'fade':    return `to{opacity:0}`;
+    case 'zoom':    return `to{transform:scale(0);opacity:0}`;
+    case 'bounce':  return `0%{transform:none}30%{transform:translateY(-12px)}100%{transform:translateY(60px);opacity:0}`;
+    case 'slide-l': return `to{transform:translateX(-60px);opacity:0}`;
+    case 'slide-r': return `to{transform:translateX(60px);opacity:0}`;
+    case 'slide-u': return `to{transform:translateY(-50px);opacity:0}`;
+    case 'slide-d': return `to{transform:translateY(50px);opacity:0}`;
+    case 'undraw':  return `from{stroke-dashoffset:0}to{stroke-dashoffset:1}`;
+  }
+}
+function animCSS(e, c, i){
+  const cls = `e${c}_${i}`;
+  const nodeList = [];
+  let kf = '', extra = '', clipRule = '';
+
+  if(e.anim!=='none' && e.anim!=='typing'){
+    const loop = LOOPS.includes(e.anim);
+    const count = loop ? (e.iter>0 ? e.iter : 'infinite') : '1';
+    const fill  = loop ? '' : 'both';
+    nodeList.push(`ai${c}_${i} ${e.dur}s ease ${e.delay}s ${count} ${fill}`.trim());
+    kf += `@keyframes ai${c}_${i}{${entranceFrames(e)}}\n`;
+  }
+  if(e.exit!=='none' && e.exit!=='untype'){
+    const loop = LOOPS.includes(e.exit);
+    const count = loop ? (e.exitIter>0 ? e.exitIter : 'infinite') : '1';
+    const fill  = loop ? '' : 'forwards';
+    nodeList.push(`ao${c}_${i} ${e.exitDur}s ease ${e.exitDelay}s ${count} ${fill}`.trim());
+    kf += `@keyframes ao${c}_${i}{${exitFrames(e)}}\n`;
+  }
+  if(e.anim==='draw' || e.exit==='undraw')
+    extra = `.${cls}{stroke-dasharray:1}\n`;
+
+  if(e.type==='text' && (e.anim==='typing' || e.exit==='untype')){
+    const chars = (e.text||' ').length, w = e.stepW ? e.stepW*chars : e.w;
+    const clipList = []; 
+    if(e.anim==='typing'){
+      clipList.push(`ti${c}_${i} ${e.dur}s steps(${chars},end) ${e.delay}s both`);
+      kf += `@keyframes ti${c}_${i}{from{width:0}to{width:${w}px}}\n`;
+    }
+    if(e.exit==='untype'){
+      clipList.push(`to${c}_${i} ${e.exitDur}s steps(${chars},end) ${e.exitDelay}s forwards`);
+      kf += `@keyframes to${c}_${i}{from{width:${w}px}to{width:0}}\n`;
+    }
+    const startOpen = e.anim!=='typing' ? `width:${w}px;` : '';
+    clipRule = `.t${c}_${i}{${startOpen}animation:${clipList.join(',')}}\n`;
+    /* Insurance for renderers that apply the clip late or
+       refuse to animate the clip rect's width (reported on
+       mobile): the text node itself holds opacity 0 until its
+       typing delay elapses, so it can never flash fully formed
+       on page load. Invisible no-op on engines where the clip
+       works correctly. */
+    if(e.anim==='typing' && e.delay > 0){
+      nodeList.push(`tg${c}_${i} ${e.delay}s steps(1,end) both`);
+      kf += `@keyframes tg${c}_${i}{from{opacity:0}to{opacity:${e.opacity}}}\n`;
+    }
+  }
+  const nodeRule = nodeList.length
+    ? `.${cls}{transform-box:fill-box;transform-origin:center;animation:${nodeList.join(',')}}\n` : '';
+  return extra + nodeRule + clipRule + kf;
+}
+
+/* ==============================================================
+   ELEMENT MARKUP (unchanged model: rotation wrapper <g>,
+   animation class + bite mask on the inner node)
+   ============================================================== */
+function elSVG(e, c, i){
+  if(e.hide) return '';
+  const cls = `e${c}_${i}`;
+  const needPL = e.anim==='draw' || e.exit==='undraw';
+  const common = `class="${cls}" fill="${e.fill}" stroke="${e.stroke}" stroke-width="${e.strokeW}" opacity="${e.opacity}"` +
+    (needPL ? ' pathLength="1"' : '') +
+    (e.bites.length ? ` mask="url(#m${c}_${i})"` : '');
+  let inner;
+  if(e.type==='text'){
+    const needClip = e.anim==='typing' || e.exit==='untype';
+    const clip = needClip ? ` clip-path="url(#t${c}_${i}clip)"` : '';
+    inner = `<text x="${e.x}" y="${e.y+e.fs}" font-size="${e.fs}" font-weight="600" font-family="ui-monospace,Menlo,Consolas,monospace" textLength="${e.w}" lengthAdjust="spacingAndGlyphs" ${common}${clip}>${esc(e.text)}</text>`;
+  } else if(e.type==='group'){
+    const pl = needPL ? 'pathLength="1" ' : '';
+    inner = `<g ${common}>` + e.parts.map(p => {
+      const g = geom(p.type, e.x+p.dx, e.y+p.dy, p.w, p.h, p.rx, pl);
+      if(p.rot){
+        const pcx = e.x+p.dx+p.w/2, pcy = e.y+p.dy+p.h/2;
+        return `<g transform="rotate(${p.rot} ${pcx} ${pcy})">${g}</g>`;
+      }
+      return g;
+    }).join('') + `</g>`;
+  } else {
+    inner = geom(e.type, e.x, e.y, e.w, e.h, e.rx, common);
+  }
+  if(e.rot){
+    const cx = e.x + e.w/2, cy = e.y + (e.h||0)/2;
+    return `<g transform="rotate(${e.rot} ${cx} ${cy})">${inner}</g>`;
+  }
+  return inner;
+}
+function biteMarkup(b, ex, ey){
+  const g = geom(b.type, ex+b.dx, ey+b.dy, b.w, b.h, b.rx, 'fill="black"');
+  if(b.rot){
+    const cx = ex+b.dx+b.w/2, cy = ey+b.dy+b.h/2;
+    return `<g transform="rotate(${b.rot} ${cx} ${cy})">${g}</g>`;
+  }
+  return g;
+}
+function defsFor(c){
+  return caps[c].els.map((e,i) => {
+    let d = '';
+    if(e.type==='text' && (e.anim==='typing' || e.exit==='untype'))
+      d += `<clipPath id="t${c}_${i}clip"><rect class="t${c}_${i}" x="${e.x}" y="${e.y}" width="0" height="${e.fs*1.4}"/></clipPath>`;
+    if(e.bites.length){
+      const bites = e.bites.map(b => {
+        if(b.parts)
+          return b.parts.map(p => biteMarkup(
+            {type:p.type, dx:b.dx+p.dx, dy:b.dy+p.dy, w:p.w, h:p.h, rx:p.rx, rot:b.rot ? b.rot : p.rot},
+            e.x, e.y)).join('');
+        return biteMarkup(b, e.x, e.y);
+      }).join('');
+      d += `<mask id="m${c}_${i}"><rect x="${e.x-2000}" y="${e.y-2000}" width="4000" height="4000" fill="white"/>${bites}</mask>`;
+    }
+    return d;
+  }).join('');
+}
+
+/* ==============================================================
+   EXPORT
+   ============================================================== */
+function buildSVG(c){
+  const cap = caps[c];
+  const css = cap.els.map((e,i)=>animCSS(e,c,i)).filter(Boolean).join('\n');
+  const body = cap.els.map((e,i)=>elSVG(e,c,i)).filter(Boolean).join('\n  ');
+  return `<svg viewBox="0 0 ${cap.w} ${cap.h}" width="${cap.w}" height="${cap.h}" xmlns="http://www.w3.org/2000/svg" role="img">
+<!-- Made with Foundry Studio. Self-contained: no scripts, no
+     external requests. Safe to commit and reference forever. -->
+<style>
+${css}
+@media(prefers-reduced-motion:reduce){*{animation:none !important}}
+</style>
+<defs>${defsFor(c)}</defs>
+  ${body}
+</svg>`;
+}
+function readmeSnippet(){
+  return caps.map((_,c) =>
+    `<p align="center">\n  <img src="./assets/capsule-${c+1}.svg" alt="" />\n</p>`).join('\n\n');
+}
+
+/* ==============================================================
+   UNDO / REDO - snapshots now carry the selection (v3 bug 3),
+   and rapid same-tag actions (arrow nudges, drags) coalesce
+   into one undo step.
+   ============================================================== */
+function snapObj(){ return JSON.stringify({caps, ac, selArr}); }
+function snap(tag){
+  const now = Date.now();
+  if(tag && tag===lastSnapTag && now-lastSnapTime < 800){ lastSnapTime = now; return; }
+  lastSnapTag = tag||''; lastSnapTime = now;
+  const s = snapObj();
+  if(undoStack[undoStack.length-1] === s) return;
+  undoStack.push(s);
+  if(undoStack.length > 60) undoStack.shift();
+  redoStack = [];
+  histBtns();
+}
+function restore(s){
+  const d = JSON.parse(s);
+  caps = d.caps;
+  ac = Math.min(d.ac||0, caps.length-1);
+  selArr = (d.selArr||[]).filter(i => caps[ac] && caps[ac].els[i]);
+  rebuildAll();
+}
+function histBtns(){
+  $('undo').disabled = !undoStack.length;
+  $('redo').disabled = !redoStack.length;
+}
+$('undo').addEventListener('click', () => {
+  if(!undoStack.length) return;
+  redoStack.push(snapObj());
+  restore(undoStack.pop()); histBtns();
+});
+$('redo').addEventListener('click', () => {
+  if(!redoStack.length) return;
+  undoStack.push(snapObj());
+  restore(redoStack.pop()); histBtns();
+});
+
+/* ==============================================================
+   RENDER
+   ============================================================== */
+function rebuildAll(){
+  stages.innerHTML = caps.map((cap,c) => `
+    <div class="cap${c===ac?' active':''}">
+      <div class="caphead">
+        <b>CAPSULE ${c+1}</b>
+        <label class="hint">W <input type="number" data-cw="${c}" value="${cap.w}"></label>
+        <label class="hint">H <input type="number" data-ch="${c}" value="${cap.h}"></label>
+        <button data-act="anim" data-cap="${c}">Anim: ${cap.anim?'on':'off'}</button>
+        <button data-act="up" data-cap="${c}">Move up</button>
+        <button data-act="down" data-cap="${c}">Move down</button>
+        <button data-act="dl" data-cap="${c}">Download capsule-${c+1}.svg</button>
+        <button data-act="kill" data-cap="${c}">Delete</button>
+      </div>
+      <svg data-cap="${c}"></svg>
+    </div>`).join('');
+  caps.forEach((_,c)=>paintCanvas(c));
+  syncPanel();
+}
+function selBBox(){
+  let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+  selArr.forEach(i => { const e = caps[ac].els[i]; if(!e) return;
+    x1=Math.min(x1,e.x); y1=Math.min(y1,e.y);
+    x2=Math.max(x2,e.x+e.w); y2=Math.max(y2,e.y+(e.h||0)); });
+  return {x1,y1,x2,y2,w:x2-x1,h:y2-y1};
+}
+function paintCanvas(c){
+  const svg = stages.querySelector(`svg[data-cap="${c}"]`);
+  if(!svg) return;
+  const cap = caps[c];
+  svg.setAttribute('width', cap.w); svg.setAttribute('height', cap.h);
+  svg.setAttribute('viewBox', `0 0 ${cap.w} ${cap.h}`);
+  /* v3 bug 1 fix: a <style> inside inline SVG is DOCUMENT-wide,
+     so the animation-off rule must name its own capsule. */
+  const css = (cap.anim ? cap.els.map((e,i)=>animCSS(e,c,i)).filter(Boolean).join('\n')
+                        : `svg[data-cap="${c}"] *{animation:none !important}`);
+  let handles = '';
+  if(c===ac){
+    selArr.forEach(si => {
+      const e = cap.els[si]; if(!e) return;
+      const pad = 3 + (e.strokeW||0)/2, h = e.h||0;
+      let box = `<rect x="${e.x-pad}" y="${e.y-pad}" width="${e.w+pad*2}" height="${h+pad*2}"
+        fill="none" stroke="#f778ba" stroke-dasharray="4 3" stroke-width="1" pointer-events="none"/>`;
+      if(e.rot){
+        const cx = e.x+e.w/2, cy = e.y+h/2;
+        box = `<g transform="rotate(${e.rot} ${cx} ${cy})">${box}</g>`;
+      }
+      handles += box;
+    });
+    if(selArr.length===1){
+      const e = cap.els[selArr[0]];
+      if(e) handles += `<rect data-handle="1" x="${e.x+e.w-5}" y="${e.y+(e.h||0)-5}" width="10" height="10"
+        fill="#f778ba" style="cursor:nwse-resize"/>`;
+    } else if(selArr.length>1){
+      const b = selBBox();
+      handles += `<rect x="${b.x1-5}" y="${b.y1-5}" width="${b.w+10}" height="${b.h+10}"
+        fill="none" stroke="#f778ba" stroke-width="1" pointer-events="none"/>
+        <rect data-handle="1" x="${b.x2-5}" y="${b.y2-5}" width="10" height="10"
+        fill="#f778ba" style="cursor:nwse-resize"/>`;
+    }
+    if(drag && drag.mode==='marquee'){
+      const m = drag.rect;
+      handles += `<rect x="${m.x}" y="${m.y}" width="${m.w}" height="${m.h}"
+        fill="#f778ba22" stroke="#f778ba" stroke-dasharray="3 3" pointer-events="none"/>`;
+    }
+    if(drag && drag.guides){
+      drag.guides.forEach(g => {
+        if(g.v!==undefined) handles += `<line x1="${g.v}" y1="0" x2="${g.v}" y2="${cap.h}" stroke="#f778ba" stroke-dasharray="2 2" opacity="0.7" pointer-events="none"/>`;
+        if(g.h!==undefined) handles += `<line x1="0" y1="${g.h}" x2="${cap.w}" y2="${g.h}" stroke="#f778ba" stroke-dasharray="2 2" opacity="0.7" pointer-events="none"/>`;
+      });
+    }
+  }
+  svg.innerHTML = `<style>${css}</style><defs>${defsFor(c)}</defs>` +
+    cap.els.map((e,i)=>elSVG(e,c,i)).join('') + handles;
+  stages.querySelectorAll('.cap').forEach((box,i)=>
+    box.classList.toggle('active', i===ac));
+}
+
+/* ==============================================================
+   PANEL
+   ============================================================== */
+function cur(){ return selArr.length===1 ? caps[ac].els[selArr[0]] : null; }
+function syncPanel(){
+  const one = cur(), many = selArr.length > 1;
+  $('noselect').style.display = (!one && !many) ? 'block' : 'none';
+  $('fields').style.display = one ? 'grid' : 'none';
+  $('multi').style.display = many ? 'block' : 'none';
+  if(many){ $('multicount').textContent = `${selArr.length} SELECTED`; return; }
+  if(!one) return;
+  const e = one;
+  $('rowText').style.display = e.type==='text' ? 'flex' : 'none';
+  $('rowFs').style.display   = e.type==='text' ? 'flex' : 'none';
+  $('rowRx').style.display   = e.type==='rect' ? 'flex' : 'none';
+  $('rowC2').style.display   = (e.anim==='colorpulse'||e.exit==='colorpulse') ? 'flex' : 'none';
+  $('rowIter').style.display = LOOPS.includes(e.anim) ? 'flex' : 'none';
+  $('rowExIter').style.display = LOOPS.includes(e.exit) ? 'flex' : 'none';
+  $('pText').value = e.text||'';
+  $('pFill').value = e.fill.slice(0,7);   $('pFillHex').value = e.fill;
+  $('pStroke').value = (e.stroke||'#000000').slice(0,7); $('pStrokeHex').value = e.stroke;
+  $('pC2').value = e.color2;              $('pC2Hex').value = e.color2;
+  $('pStrokeW').value = e.strokeW; $('pRx').value = e.rx;
+  $('pFs').value = e.fs||26; $('pRot').value = e.rot; $('pOp').value = e.opacity;
+  $('pAnim').value = e.anim; $('pDelay').value = e.delay; $('pDur').value = e.dur;
+  $('pIter').value = e.iter; $('pExit').value = e.exit;
+  $('pExitDelay').value = e.exitDelay; $('pExitDur').value = e.exitDur;
+  $('pExitIter').value = e.exitIter;
+}
+function bindColor(pick, hex, key){
+  $(pick).addEventListener('input', () => { const e=cur(); if(!e) return;
+    e[key] = $(pick).value; $(hex).value = $(pick).value; paintCanvas(ac); });
+  $(hex).addEventListener('input', () => { const e=cur(); if(!e) return;
+    const v = $(hex).value.trim();
+    if(/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)){
+      e[key] = v; $(pick).value = v.slice(0,7); paintCanvas(ac);
+    }});
+}
+bindColor('pFill','pFillHex','fill');
+bindColor('pStroke','pStrokeHex','stroke');
+bindColor('pC2','pC2Hex','color2');
+const bind = (id, key, num) => $(id).addEventListener('input', () => {
+  const e = cur(); if(!e) return;
+  e[key] = num ? +$(id).value : $(id).value;
+  if(key==='text' || key==='fs'){ if(e.type==='text') fitText(e); }
+  if(id==='pAnim' || id==='pExit') syncPanel();
+  paintCanvas(ac);
+});
+bind('pText','text'); bind('pStrokeW','strokeW',1); bind('pRx','rx',1);
+bind('pFs','fs',1); bind('pRot','rot',1); bind('pOp','opacity',1);
+bind('pAnim','anim'); bind('pDelay','delay',1); bind('pDur','dur',1);
+bind('pIter','iter',1); bind('pExit','exit');
+bind('pExitDelay','exitDelay',1); bind('pExitDur','exitDur',1);
+bind('pExitIter','exitIter',1);
+$('props').addEventListener('focusin', () => snap());
+
+/* ==============================================================
+   MULTI-SELECTION ACTIONS
+   ============================================================== */
+function selected(){ return selArr.map(i=>caps[ac].els[i]).filter(Boolean); }
+function bulk(field, inputId, min){
+  return () => { snap();
+    const v = +$(inputId).value || 0;
+    selected().forEach(e => e[field] = Math.max(min, +(e[field] + v).toFixed(2)));
+    paintCanvas(ac);
+  };
+}
+$('mDelayGo').addEventListener('click', bulk('delay','mDelay',0));
+$('mDurGo').addEventListener('click', bulk('dur','mDur',0.1));
+$('mExDelayGo').addEventListener('click', bulk('exitDelay','mExDelay',0));
+$('mExDurGo').addEventListener('click', bulk('exitDur','mExDur',0.1));
+$('unite').addEventListener('click', () => {
+  const els = caps[ac].els;
+  const idx = selArr.filter(i => els[i] && BITEABLE.includes(els[i].type));
+  if(idx.length < 2) return;
+  snap();
+  const parts = [];
+  let x1=1e9, y1=1e9, x2=-1e9, y2=-1e9;
+  idx.forEach(i => { const e = els[i];
+    x1=Math.min(x1,e.x); y1=Math.min(y1,e.y);
+    x2=Math.max(x2,e.x+e.w); y2=Math.max(y2,e.y+(e.h||0)); });
+  idx.forEach(i => { const e = els[i];
+    if(e.type==='group')
+      e.parts.forEach(p => parts.push({type:p.type, dx:e.x+p.dx-x1, dy:e.y+p.dy-y1, w:p.w, h:p.h, rx:p.rx, rot:(p.rot||0)+(e.rot||0)}));
+    else
+      parts.push({type:e.type, dx:e.x-x1, dy:e.y-y1, w:e.w, h:e.h, rx:e.rx, rot:e.rot||0});
+  });
+  const first = els[idx[0]];
+  const g = Object.assign(makeEl('group'),
+    { x:x1, y:y1, w:x2-x1, h:y2-y1, parts,
+      fill:first.fill, stroke:first.stroke, strokeW:first.strokeW,
+      anim:first.anim, delay:first.delay, dur:first.dur });
+  caps[ac].els = els.filter((_,i)=>!idx.includes(i));
+  caps[ac].els.push(g);
+  selArr = [caps[ac].els.length-1];
+  paintCanvas(ac); syncPanel();
+});
+function hideSel(){ if(!selArr.length) return; snap();
+  selected().forEach(e => e.hide = true);
+  selArr = []; paintCanvas(ac); syncPanel(); }
+$('mHide').addEventListener('click', hideSel);
+$('hideone').addEventListener('click', hideSel);
+$('showhidden').addEventListener('click', () => { snap();
+  caps.forEach(cap => cap.els.forEach(e => e.hide = false));
+  caps.forEach((_,c)=>paintCanvas(c));
+});
+function delSel(){ if(!selArr.length) return; snap();
+  caps[ac].els = caps[ac].els.filter((_,i)=>!selArr.includes(i));
+  selArr = []; paintCanvas(ac); syncPanel(); }
+$('mDel').addEventListener('click', delSel);
+$('del').addEventListener('click', delSel);
+
+/* ==============================================================
+   BITE (rotation-correct, unchanged from v3)
+   ============================================================== */
+$('bite').addEventListener('click', () => {
+  const a = cur();
+  if(!a || !BITEABLE.includes(a.type)) return;
+  snap();
+  let hitAny = 0;
+  const acx = a.x + a.w/2, acy = a.y + a.h/2;
+  caps[ac].els.forEach((b,i) => {
+    if(i===selArr[0] || !BITEABLE.includes(b.type) || b.hide) return;
+    const overlap = a.x < b.x+b.w && a.x+a.w > b.x &&
+                    a.y < b.y+b.h && a.y+a.h > b.y;
+    if(!overlap) return;
+    const bcx = b.x + b.w/2, bcy = b.y + (b.h||0)/2;
+    const p = b.rot ? rotPt(acx, acy, bcx, bcy, -b.rot) : {x:acx, y:acy};
+    const bite = { type:a.type, dx:p.x - a.w/2 - b.x, dy:p.y - a.h/2 - b.y,
+                   w:a.w, h:a.h, rx:a.rx, rot:(a.rot||0)-(b.rot||0) };
+    if(a.type==='group') bite.parts = JSON.parse(JSON.stringify(a.parts));
+    b.bites.push(bite);
+    hitAny++;
+  });
+  if(hitAny) paintCanvas(ac);
+});
+$('unbite').addEventListener('click', () => { const e=cur(); if(!e) return;
+  snap(); e.bites = []; paintCanvas(ac); });
+
+/* ==============================================================
+   POINTER: marquee / multi-move / multi-resize / guides /
+   Alt+click stack cycling
+   ============================================================== */
+let drag = null;
+function posIn(svg, ev){
+  const r = svg.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+}
+stages.addEventListener('pointerdown', ev => {
+  const svg = ev.target.closest('svg[data-cap]');
+  if(!svg) return;
+  const prev = ac;
+  ac = +svg.dataset.cap;
+  if(prev !== ac) selArr = [];
+  const p = posIn(svg, ev);
+  const els = caps[ac].els;
+
+  if(ev.target.dataset && ev.target.dataset.handle){
+    snap();
+    const b = selBBox();
+    drag = { mode:'resize', p, box:b,
+      origs: selArr.map(i => { const e = els[i];
+        return { i, x:e.x, y:e.y, w:e.w, h:e.h, fs:e.fs,
+          parts: e.parts ? JSON.parse(JSON.stringify(e.parts)) : null }; }) };
+    return;
+  }
+  const hits = [];
+  for(let i = els.length-1; i >= 0; i--)
+    if(!els[i].hide && hit(els[i], p.x, p.y)) hits.push(i);
+
+  if(ev.shiftKey && hits.length){
+    const i = hits[0];
+    selArr = selArr.includes(i) ? selArr.filter(x=>x!==i) : [...selArr, i];
+  } else if(hits.length){
+    if(ev.altKey && selArr.length===1 && hits.includes(selArr[0]) && hits.length>1){
+      /* Alt held: cycle down the stack under the pointer. */
+      const pos = hits.indexOf(selArr[0]);
+      selArr = [hits[(pos+1) % hits.length]];
+    } else if(!selArr.some(i => hits.includes(i))){
+      /* Clicked outside the current selection: select top hit.
+         Clicking INSIDE a multi-selection keeps it, so it can
+         be dragged as one (v3 bug: multi could not move). */
+      selArr = [hits[0]];
+    }
+    snap('drag');
+    drag = { mode:'move', p,
+      orig: selArr.map(i => ({ i, x:els[i].x, y:els[i].y })) };
+  } else {
+    selArr = [];
+    drag = { mode:'marquee', p, rect:{x:p.x,y:p.y,w:0,h:0} };
+  }
+  if(prev !== ac) paintCanvas(prev);
+  paintCanvas(ac); syncPanel();
+});
+document.addEventListener('pointermove', ev => {
+  if(!drag) return;
+  const svg = stages.querySelector(`svg[data-cap="${ac}"]`);
+  if(!svg) return;
+  const p = posIn(svg, ev);
+  const els = caps[ac].els;
+  if(drag.mode === 'move'){
+    let dx = p.x - drag.p.x, dy = p.y - drag.p.y;
+    drag.guides = [];
+    if(ui.guides && drag.orig.length){
+      /* Snap the selection center to canvas center and to
+         other shapes' centers when within 5px. */
+      const b0 = drag.orig.reduce((b,o) => { const e = els[o.i]; if(!e) return b;
+        const nx = o.x+dx, ny = o.y+dy;
+        return { x1:Math.min(b.x1,nx), y1:Math.min(b.y1,ny),
+                 x2:Math.max(b.x2,nx+e.w), y2:Math.max(b.y2,ny+(e.h||0)) };
+      }, {x1:1e9,y1:1e9,x2:-1e9,y2:-1e9});
+      const scx = (b0.x1+b0.x2)/2, scy = (b0.y1+b0.y2)/2;
+      const tx = [caps[ac].w/2], ty = [caps[ac].h/2];
+      els.forEach((e,i) => {
+        if(e.hide || drag.orig.some(o=>o.i===i)) return;
+        tx.push(e.x+e.w/2); ty.push(e.y+(e.h||0)/2);
+      });
+      let bestX = null, bestY = null;
+      tx.forEach(t => { if(Math.abs(t-scx) < 5 && (bestX===null || Math.abs(t-scx)<Math.abs(bestX-scx))) bestX = t; });
+      ty.forEach(t => { if(Math.abs(t-scy) < 5 && (bestY===null || Math.abs(t-scy)<Math.abs(bestY-scy))) bestY = t; });
+      if(bestX!==null){ dx += bestX - scx; drag.guides.push({v:bestX}); }
+      if(bestY!==null){ dy += bestY - scy; drag.guides.push({h:bestY}); }
+    }
+    drag.orig.forEach(o => { const e = els[o.i]; if(!e) return;
+      e.x = Math.round(o.x + dx);
+      e.y = Math.round(o.y + dy); });
+  } else if(drag.mode === 'resize'){
+    if(selArr.length === 1){
+      const e = cur(); if(!e) return;
+      const cx = e.x+e.w/2, cy = e.y+(e.h||0)/2;
+      const q = e.rot ? rotPt(p.x, p.y, cx, cy, -e.rot) : p;
+      const ow = e.w, oh = e.h;
+      if(e.type==='line'){
+        /* Angle locking: near-horizontal/vertical auto-snaps
+           so "just extend it a bit" stays straight; holding
+           Shift constrains to 45-degree steps, keeping the
+           dragged length. */
+        let dx = Math.round(q.x - e.x), dy = Math.round(q.y - e.y);
+        if(ev.shiftKey){
+          const len = Math.hypot(dx, dy);
+          const ang = Math.round(Math.atan2(dy, dx) / (Math.PI/4)) * (Math.PI/4);
+          dx = Math.round(Math.cos(ang) * len);
+          dy = Math.round(Math.sin(ang) * len);
+        } else {
+          if(Math.abs(dy) <= 6 && Math.abs(dx) > 12) dy = 0;
+          if(Math.abs(dx) <= 6 && Math.abs(dy) > 12) dx = 0;
+        }
+        e.w = Math.max(10, dx); e.h = dy;
+      } else if(e.type==='text'){
+        e.w = Math.max(10, Math.round(q.x - e.x));
+        e.h = Math.max(12, Math.round(q.y - e.y));
+        e.fs = Math.max(8, Math.round(e.h * 0.8));
+        fitText(e);
+      } else {
+        e.w = Math.max(10, Math.round(q.x - e.x));
+        e.h = Math.max(10, Math.round(q.y - e.y));
+      }
+      if(e.type==='group' && ow>0){
+        const fx = e.w/ow, fy = (oh>0 ? e.h/oh : 1);
+        e.parts.forEach(pt => { pt.dx*=fx; pt.w*=fx; pt.dy*=fy; pt.h*=fy; });
+      }
+    } else {
+      /* Group scale around the selection's top-left corner.
+         Individual rotations are left alone (documented). */
+      const b = drag.box;
+      if(b.w < 1 || b.h < 1) return;
+      const fx = Math.max(0.05, (p.x - b.x1) / b.w);
+      const fy = Math.max(0.05, (p.y - b.y1) / b.h);
+      drag.origs.forEach(o => { const e = els[o.i]; if(!e) return;
+        e.x = Math.round(b.x1 + (o.x - b.x1) * fx);
+        e.y = Math.round(b.y1 + (o.y - b.y1) * fy);
+        e.w = Math.max(10, Math.round(o.w * fx));
+        if(e.type==='text'){
+          e.fs = Math.max(8, Math.round((o.fs||26) * fy));
+          fitText(e);
+        } else if(e.type==='line'){
+          e.h = Math.round(o.h * fy);
+        } else {
+          e.h = Math.max(10, Math.round(o.h * fy));
+          if(e.type==='group' && o.parts && o.w>0){
+            /* Rebuild parts from their stored ORIGINALS every
+               move, so scaling never compounds across events. */
+            const gfx = e.w/o.w, gfy = (o.h>0 ? e.h/o.h : 1);
+            e.parts = o.parts.map(pt => ({ ...pt,
+              dx: pt.dx*gfx, w: pt.w*gfx,
+              dy: pt.dy*gfy, h: pt.h*gfy }));
+          }
+        }
+      });
+    }
+  } else if(drag.mode === 'marquee'){
+    drag.rect = { x:Math.min(drag.p.x,p.x), y:Math.min(drag.p.y,p.y),
+                  w:Math.abs(p.x-drag.p.x), h:Math.abs(p.y-drag.p.y) };
+  }
+  paintCanvas(ac);
+});
+document.addEventListener('pointerup', () => {
+  if(drag && drag.mode==='marquee'){
+    const m = drag.rect, els = caps[ac].els;
+    selArr = [];
+    els.forEach((e,i) => {
+      if(e.hide) return;
+      const h = e.h||12;
+      if(e.x < m.x+m.w && e.x+e.w > m.x && e.y < m.y+m.h && e.y+h > m.y)
+        selArr.push(i);
+    });
+  }
+  if(drag) drag.guides = null;
+  drag = null;
+  paintCanvas(ac); syncPanel();
+});
+
+/* ==============================================================
+   KEYBOARD: shortcuts, arrow nudging, delete, undo/redo
+   ============================================================== */
+function typing(){ const t = document.activeElement.tagName;
+  return t==='INPUT' || t==='TEXTAREA' || t==='SELECT'; }
+const KEYACTIONS = {
+  bite: () => $('bite').click(),
+  unbite: () => $('unbite').click(),
+  unite: () => $('unite').click(),
+  hide: hideSel,
+  show: () => $('showhidden').click(),
+  dup: () => $('dup').click(),
+  fwd: () => $('zUp').click(),
+  back: () => $('zDown').click(),
+  ctrh: () => $('alignH').click(),
+  ctrv: () => $('alignV').click(),
+};
+document.addEventListener('keydown', ev => {
+  if(typing()) return;
+  if(ev.key === 'Delete' || ev.key === 'Backspace'){ ev.preventDefault(); delSel(); return; }
+  if((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='z' && !ev.shiftKey){ ev.preventDefault(); $('undo').click(); return; }
+  if((ev.ctrlKey||ev.metaKey) && (ev.key.toLowerCase()==='y' || (ev.key.toLowerCase()==='z' && ev.shiftKey))){ ev.preventDefault(); $('redo').click(); return; }
+  if(ev.key.startsWith('Arrow') && selArr.length){
+    ev.preventDefault();
+    snap('nudge');
+    const step = ev.shiftKey ? 10 : 1;
+    const dx = ev.key==='ArrowLeft' ? -step : ev.key==='ArrowRight' ? step : 0;
+    const dy = ev.key==='ArrowUp' ? -step : ev.key==='ArrowDown' ? step : 0;
+    selected().forEach(e => { e.x += dx; e.y += dy; });
+    paintCanvas(ac); return;
+  }
+  if(ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  for(const act in ui.keymap){
+    if(ev.key.toLowerCase() === ui.keymap[act].toLowerCase()){
+      ev.preventDefault(); KEYACTIONS[act](); return;
+    }
+  }
+});
+
+/* Shortcuts panel: view + rebind. */
+function refreshKbd(){
+  document.querySelectorAll('kbd[data-kbd]').forEach(k =>
+    k.textContent = (ui.keymap[k.dataset.kbd]||'').toUpperCase());
+}
+function buildScTable(){
+  $('sctable').innerHTML =
+    `<tr><td><b>Alt + click</b></td><td>cycle to shape underneath</td><td>hold</td><td></td></tr>` +
+    `<tr><td><b>Arrows / Shift+Arrows</b></td><td>nudge 1px / 10px</td><td>tap</td><td></td></tr>` +
+    `<tr><td><b>Del</b></td><td>delete selection</td><td>tap</td><td></td></tr>` +
+    KEYINFO.map(([act,label,kind]) =>
+      `<tr><td><input type="text" class="keybox" maxlength="1" data-key="${act}" value="${(ui.keymap[act]||'').toUpperCase()}"></td>
+       <td>${label}</td><td>${kind}</td><td></td></tr>`).join('');
+  $('sctable').querySelectorAll('input[data-key]').forEach(inp =>
+    inp.addEventListener('input', () => {
+      const v = inp.value.trim().toLowerCase();
+      if(v){ ui.keymap[inp.dataset.key] = v; refreshKbd(); }
+    }));
+}
+$('shortcutsBtn').addEventListener('click', () => {
+  const sc = $('shortcuts');
+  const open = sc.style.display === 'block';
+  sc.style.display = open ? 'none' : 'block';
+  if(!open) buildScTable();
+});
+
+/* ==============================================================
+   UI PREFS: flip, guides, section order
+   ============================================================== */
+function applyUI(){
+  $('maingrid').classList.toggle('flip', ui.flip);
+  $('guidesToggle').textContent = 'Guides: ' + (ui.guides ? 'on' : 'off');
+  document.querySelectorAll('#fields .sect').forEach(s =>
+    s.style.order = ui.order.indexOf(s.dataset.sec));
+  refreshKbd();
+}
+$('flip').addEventListener('click', () => { ui.flip = !ui.flip; applyUI(); });
+$('guidesToggle').addEventListener('click', () => { ui.guides = !ui.guides; applyUI(); });
+document.querySelectorAll('[data-secmove]').forEach(b =>
+  b.addEventListener('click', () => {
+    const sec = b.closest('.sect').dataset.sec;
+    const i = ui.order.indexOf(sec), j = i + (+b.dataset.secmove);
+    if(j < 0 || j >= ui.order.length) return;
+    [ui.order[i], ui.order[j]] = [ui.order[j], ui.order[i]];
+    applyUI();
+  }));
+
+/* ==============================================================
+   CAPSULE HEADERS + PROJECT + EXPORT
+   ============================================================== */
+stages.addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-act]');
+  if(!b) return;
+  const c = +b.dataset.cap;
+  if(b.dataset.act==='anim'){
+    caps[c].anim = !caps[c].anim;
+    b.textContent = 'Anim: ' + (caps[c].anim?'on':'off');
+    paintCanvas(c); return;
+  }
+  if(b.dataset.act==='dl'){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buildSVG(c)],{type:'image/svg+xml'}));
+    a.download = `capsule-${c+1}.svg`; a.click(); URL.revokeObjectURL(a.href);
+    return;
+  }
+  snap();
+  if(b.dataset.act==='kill'){
+    if(caps.length===1) caps[0] = makeCap(); else caps.splice(c,1);
+    ac = Math.min(ac, caps.length-1); selArr = []; rebuildAll(); return;
+  }
+  if(b.dataset.act==='up' && c>0){
+    [caps[c-1],caps[c]] = [caps[c],caps[c-1]];
+    if(ac===c) ac=c-1; else if(ac===c-1) ac=c;
+    selArr = []; rebuildAll(); return;
+  }
+  if(b.dataset.act==='down' && c<caps.length-1){
+    [caps[c+1],caps[c]] = [caps[c],caps[c+1]];
+    if(ac===c) ac=c+1; else if(ac===c+1) ac=c;
+    selArr = []; rebuildAll(); return;
+  }
+});
+stages.addEventListener('input', ev => {
+  const t = ev.target;
+  if(t.dataset.cw !== undefined){ caps[+t.dataset.cw].w = +t.value || 100; paintCanvas(+t.dataset.cw); }
+  if(t.dataset.ch !== undefined){ caps[+t.dataset.ch].h = +t.value || 60; paintCanvas(+t.dataset.ch); }
+});
+
+document.querySelectorAll('[data-add]').forEach(b =>
+  b.addEventListener('click', () => { snap();
+    caps[ac].els.push(makeEl(b.dataset.add));
+    selArr = [caps[ac].els.length-1];
+    paintCanvas(ac); syncPanel();
+  }));
+$('addcap').addEventListener('click', () => { snap();
+  caps.push(makeCap()); ac = caps.length-1; selArr = []; rebuildAll(); });
+$('alignH').addEventListener('click', () => { const e=cur(); if(!e)return;
+  snap(); e.x = Math.round((caps[ac].w - e.w)/2); paintCanvas(ac); });
+$('alignV').addEventListener('click', () => { const e=cur(); if(!e)return;
+  snap(); e.y = Math.round((caps[ac].h - (e.h||0))/2); paintCanvas(ac); });
+$('zUp').addEventListener('click', () => { const els=caps[ac].els, s=selArr[0];
+  if(selArr.length!==1||s===els.length-1)return; snap();
+  [els[s],els[s+1]] = [els[s+1],els[s]]; selArr=[s+1]; paintCanvas(ac); });
+$('zDown').addEventListener('click', () => { const els=caps[ac].els, s=selArr[0];
+  if(selArr.length!==1||s<1)return; snap();
+  [els[s],els[s-1]] = [els[s-1],els[s]]; selArr=[s-1]; paintCanvas(ac); });
+$('dup').addEventListener('click', () => { const e=cur(); if(!e)return; snap();
+  const c = JSON.parse(JSON.stringify(e));
+  c.id = nextId++; c.x += 20; c.y += 20;
+  caps[ac].els.push(c); selArr = [caps[ac].els.length-1]; paintCanvas(ac); syncPanel(); });
+$('replay').addEventListener('click', () => caps.forEach((_,c)=>paintCanvas(c)));
+$('bgToggle').addEventListener('click', () => {
+  stages.classList.toggle('light');
+  $('bgToggle').textContent = 'Preview: ' + (stages.classList.contains('light') ? 'light' : 'dark');
+});
+
+$('save').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({caps, ui}, null, 2)],{type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'project.json'; a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('load').addEventListener('click', () => $('loadfile').click());
+$('loadfile').addEventListener('change', ev => {
+  const f = ev.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try{
+      const d = JSON.parse(r.result);
+      caps = d.caps && d.caps.length ? d.caps : [makeCap()];
+      if(d.els) caps = [{ w:d.canvas?d.canvas.w:760, h:d.canvas?d.canvas.h:200, els:d.els }];
+      caps.forEach(cap => {
+        if(cap.anim===undefined) cap.anim = true;
+        cap.els.forEach(e => {
+          const d2 = { bites:[], rot:0, color2:'#58a6ff', iter:0,
+            exit:'none', exitDelay:3, exitDur:0.8, exitIter:0, hide:false };
+          for(const k in d2) if(e[k]===undefined) e[k] = d2[k];
+          if(e.type==='text') fitText(e);
+        });
+      });
+      if(d.ui){ ui = Object.assign(ui, d.ui);
+        ui.keymap = Object.assign({}, ui.keymap, d.ui.keymap||{}); }
+      ac = 0; selArr = [];
+      nextId = Math.max(0, ...caps.flatMap(c=>c.els.map(e=>e.id))) + 1;
+      undoStack = []; redoStack = []; histBtns();
+      applyUI(); rebuildAll();
+    }catch(err){ alert('Could not read that file: ' + err.message); }
+  };
+  r.readAsText(f);
+});
+
+$('cpmd').addEventListener('click', () => navigator.clipboard.writeText(readmeSnippet()));
+$('cpsvg').addEventListener('click', () => navigator.clipboard.writeText(buildSVG(ac)));
+$('viewsvg').addEventListener('click', () => {
+  const out = $('exportout');
+  const open = out.style.display === 'block';
+  out.style.display = open ? 'none' : 'block';
+  $('viewsvg').textContent = open ? 'View code' : 'Hide code';
+  if(!open) out.textContent = buildSVG(ac);
+});
+
+/* ==============================================================
+   DEMO
+   ============================================================== */
+caps = [ makeCap() ];
+caps[0].els = [
+  Object.assign(makeEl('pill'), {x:40,y:70,w:180,h:56,fill:'#21262d',anim:'slide-l',dur:0.8}),
+  Object.assign(makeEl('text'), {x:66,y:84,text:'hello',fs:26,fill:'#f778ba',anim:'typing',delay:0.6,dur:1}),
+  Object.assign(makeEl('line'), {x:260,y:98,w:180,h:0,anim:'draw',delay:1.2,dur:1,exit:'undraw',exitDelay:6,exitDur:1}),
+  Object.assign(makeEl('rect'), {x:520,y:60,w:120,h:80,fill:'#58a6ff',anim:'fade',delay:1.8,dur:0.8,
+    bites:[{type:'ellipse',dx:70,dy:-25,w:100,h:70,rx:8,rot:0}]}),
+  Object.assign(makeEl('ellipse'), {x:680,y:75,w:50,h:50,fill:'#f778ba',
+    anim:'zoom',delay:2.4,dur:0.6,exit:'wobble',exitDelay:4,exitDur:0.8,exitIter:0})
+];
+caps[0].els.forEach(e => { if(e.type==='text') fitText(e); });
+applyUI(); rebuildAll(); histBtns();
+</script>
+</body>
+</html>
