@@ -1,203 +1,273 @@
-# FoundryStudio
-Design GitHub-ready animated SVGs in stacked capsules. Everything you export, you own.<br>
+# Foundry Studio
+
+Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no dependencies, everything you export you own.
 
 [**Try it live**](https://luigalve.github.io/FoundryStudio/) | [View the source](https://github.com/luigalve/FoundryStudio/blob/main/index.html)
+
 <br>
 <br>
+
 ![Alt Text](images/FoundryStudio-intro-Capsule.svg)
 <br>
 
+## Why
 
-**Helpful Probe**<br>
+|                  |                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Zero dependency  | One file, no framework, no build, no signup.                                                                        |
+| Offline          | Nothing you draw leaves your machine. Download it once, runs offline forever.                                       |
+| Safe to commit   | Exports carry no scripts and no external references. GitHub renders them in a README without stripping anything. |
+| Editable forever | Save a project.json and you can reopen and change any capsule later.                                                |
+
+<br>
+
+<br>
+<br>
+
+
+
+**This banner is a test.** FoundryStudio's exporter generated it.<br>
+
 ![Alt Text](images/foundry-probe.svg)
 <br>
-Six rows, each testing one mechanism.<br>
-Grey labels never animate. A blank row means the mechanism failed and not the file.
 
+<sub>All six rows should animate. It restarts itself 2 seconds after it finishes the animation, so you should see it move. The grey labels never move, so a still row is a failed mechanism, not a failed file.</sub>
 <br>
 
-## Table of Contents
+| Row     | Tests                                     | Fails as                                |
+| ------- | ----------------------------------------- | --------------------------------------- |
+| 1 slide | translate on a text node                  | text stuck above position, or missing   |
+| 2 fade  | opacity                                   | text missing                            |
+| 3 color | fill animation, one pass per cycle        | text never changes color                |
+| 4 draw  | stroke-dashoffset with a real dash length | bar solid or dotted, never drawing      |
+| 5 type  | textPath on a growing path                | text appears all at once, or not at all |
+| 6 turn  | scale and rotate about center             | square static, or off position          |
 
-- [Quick start](#quick-start)
-- [Top bar: Add, Project, & Export](#top-bar)
-- [Capsule header](#capsule-header)
-- [Canvas and mouse](#canvas-and-mouse)
-- [Element panel](#element-panel)
-- [Animation panel](#animation-panel)
-- [Combine, history, and arrange](#combine-history-and-arrange)
-- [Multi-select panel](#multi-select-panel)
-- [Keys](#keys)
-- [Seven things the buttons do not tell you](#seven-things-the-buttons-do-not-tell-you)
-- [License](#license)
-
+If a row does not move on your device, open a [device report](../../issues/new?template=device-report.md).
 <br>
 <br>
-  
+<br>
 
-One HTML file. Open it in a browser and you have a visual editor: shapes, text, entrance and exit animations, travelling cuts, alignment guides, undo. Download the result as a self-contained SVG and commit it. No install, no build step, no npm, no account.
-
-| What | Why it matters |
-|---|---|
-| Offline | The editor makes no network requests. Nothing you draw leaves your machine. |
-| Zero dependency | One file, no framework, no build. Save it and it still opens in five years. |
-| Safe to commit | The exported SVG carries no scripts and no external references, so GitHub renders it in a README without stripping anything. |
-| Respects the reader | Every export ships a `prefers-reduced-motion` rule. The animation turns itself off for people who have asked for that. |
-| Editable forever | Save a `project.json` and you can reopen and change any capsule later. |
+---
 <br>
 
 ## Quick start
 
-1. Click here to try it live or download `index.html` and double click it to open it in a browser.
-2. Add a shape. Give it an entrance, a delay, and an exit.
-3. Click **Replay** to watch the whole capsule from zero.
-4. Click **Download capsule-1.svg** in the capsule header and save it to `assets/`.
-5. Click **Copy README snippet** and paste it into your README.
-6. Click **Save project (.json)** before you close the tab. The SVG cannot be reopened.<br>
+1. [Jump right in](https://luigalve.github.io/FoundryStudio/) or,<br>
+   view and download the [`index.html`  source file](https://github.com/luigalve/FoundryStudio/blob/main/index.html).
+    <sub>Double click the downloaded file to open it in a browser.</sub>
+>
+2. Add **shapes**, **text**, and **animate**.
+Give them an entrance, a delay, and an exit.
+>
+3. Add additional capsules.
+> 
+4. Click **Replay** to watch the capsule animation.
+>
+5. Click **Download capsule-#.svg** in the capsule header and save it to `assets/` in your repo.
+>
+6. Click **Copy README snippet** and paste it into your README.
+>
+7. Click **Save project (.json)** before you close the tab. The SVG alone cannot be reopened.
 
-<sub>Capsules can be renamed but you must also change the REAMME snippet to match.</sub>
-<br>
-<br>
-
-## Top bar
-**Add, Project, and Export**
-
-| Control | What it does | How to use / key |
-|---|---|---|
-| Rectangle, Pill, Ellipse, Line, Triangle, Text | Adds that shape to the active capsule and selects it | Click. Lands at x60 y60. Pill is a rect with the radius maxed. Line is stroke-only |
-| Copy README snippet | Copies a centered `<img>` block for every capsule | Click, paste into your README. It points at `./assets/capsule-N.svg`, so save your SVGs there |
-| Copy active SVG | Copies the full SVG source of the active capsule | Click, paste anywhere |
-| View code | Shows the active capsule's SVG source under the canvases | Click to open, click again (now "Hide code") to close |
-| Add capsule | Adds a blank 760x200 capsule and makes it active | Click |
-| Preview: dark / light | Switches the canvas background | Click to flip. Preview only. The export is transparent, so check your art on both |
-| Replay | Restarts every animation in every capsule from zero | Click after any timing change |
-| Guides: on / off | Snap-to-center alignment lines while dragging | Toggle. When on, the selection snaps to the canvas center and to other shapes' centers within 5px, with pink lines showing the match |
-| Flip layout | Swaps the canvas column and the panel column | Click |
-| Shortcuts | Opens the key table and lets you rebind | Click a key box, press a new key. Bindings save inside the project file |
-| Save project (.json) | Downloads `project.json`: capsules, shapes, key bindings | Click. This is your editable source. An SVG cannot be reopened |
-| Load project | Restores a `project.json` | Click, pick the file. Replaces everything and clears the undo history |
 <br>
 
-## Capsule header
-
-One header per capsule.
-
-| Control | What it does | How to use / key |
-|---|---|---|
-| W / H | Capsule canvas size in px | Type a number. Default 760 x 200 |
-| Anim: on / off | Freezes that capsule's animations in the preview | Click. Preview only. The exported SVG still animates |
-| Move up / Move down | Reorders capsules in the stack | Click. Order sets the numbering in the README snippet |
-| Download capsule-N.svg | Saves that capsule as a standalone SVG | Click |
-| Delete | Removes the capsule | Click. Deleting the last one empties it instead |
+---
 <br>
 
-## Canvas and mouse
+## Controls
 
-| Control | What it does | How to use / key |
-|---|---|---|
-| Click a shape | Selects the top shape under the pointer | Click |
-| Alt + click | Cycles down through stacked shapes at that spot | Hold Alt and click again. Needs one shape already selected |
-| Shift + click | Adds or removes a shape from the selection | Shift + click |
-| Drag empty canvas | Marquee select | Drag a box. Anything it touches is selected |
-| Drag a shape | Moves it, or the whole selection as one | Drag. Arrows nudge 1px, Shift + arrows 10px |
-| Pink corner handle | Resize | One shape: bottom-right drag. Text: drag down to grow the font, width follows the text. Line: near-straight auto-snaps straight, Shift locks to 45 degree steps. Multi: scales the selection together, rotation ignored, so rotate afterward |
+
+### Top bar
+
+| Control                                        | What it does                                                                            |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Rectangle, Pill, Ellipse, Line, Triangle, Text | Adds the shape at the radius maxed. Line is stroke-only.                                |
+| Copy README snippet                            | Copies a centered img block for the active capsule, pointing at `assets/capsule-N.svg`. |
+| Copy active SVG                                | Copies the full SVG source of the active capsule.                                       |
+| View code                                      | Shows the active capsule's SVG source under the canvases.                               |
+| Add capsule                                    | Adds a blank 760x200 capsule and makes it active.                                       |
+| Preview: dark / light                          | Switches the canvas background. The background is not exported.                         |
+| Replay                                         | Restarts every animation from zero.                                                     |
+| Guides                                         | Snap-to-center alignment lines while dragging, with pink lines showing the match.       |
+| Flip layout                                    | Swaps the canvas column and the panel column.                                           |
+| Shortcuts                                      | Opens the key table. Every binding is editable there.                                   |
+| Save project (.json) / Load project            | The project file is the only reopenable format.                                         |
+
 <br>
 
-## Element panel
-
-Shown when exactly one shape is selected.
-
-| Control | What it does | How to use / key |
-|---|---|---|
-| Text | The string a text element renders | Type. Width follows the text |
-| Fill / Stroke | Color picker plus a hex field | Pick, or type hex. 8 digits carries alpha: `#00000000` is fully transparent, which is how you get no fill |
-| Stroke width | Outline thickness | Number. Must be above 0 for "draw stroke" to show anything |
-| Corner radius | Rectangle rounding | Number. Rects only. Pill is already maxed |
-| Font size | Text size in px | Number. Text only |
-| Rotation (deg) | Rotates around the shape's center | Number. Rotation sits on a wrapper, so animations never overwrite it |
-| Opacity | 0 to 1 | Number, 0.05 steps. Animations use this as their end state |
-| Hide | Hides the selection without deleting it | Click, or `H` |
-| Show hidden | Unhides everything, in every capsule | Click, or `S` |
+---
 <br>
 
-## Animation panel
+### Capsule header
 
-| Control | What it does | How to use / key |
-|---|---|---|
-| Entrance / loop | First thing the shape does: fade, zoom, bounce, four slides, draw stroke, typing, or any of the seven loops | Pick from the list. "draw stroke" needs a stroke. "typing" needs a text element |
-| Delay (s) | Wait before the entrance starts | Number. Staggering delays across shapes is what makes a capsule read as a sequence |
-| Duration (s) | How long the entrance takes | Number |
-| Iterations | Loop repeat count, 0 = forever | Appears only when the entrance is a loop |
-| Exit / second | Second thing the shape does: any out, undraw, untype, or any loop | Pick from the list. This is a full second slot, so "fade in, then wobble forever" is one element |
-| Exit delay (s) | Wait before the exit fires | Number, default 3. Timed from zero, not from the end of the entrance |
-| Exit duration (s) | How long the exit takes | Number |
-| Exit iterations | Repeat count for a looping exit, 0 = forever | Appears only when the exit is a loop |
-| Second color | The color "color pulse" pulses to | Appears only when the entrance or exit is color pulse |
+| Control                | What it does                                                                                                                                                                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W / H                  | Capsule size in px. Default 760x200.                                                                                                                                                                                                                 |
+| Anim: on / off         | Off shows the still image a renderer sees when it ignores animation. That picture is always the finished one.                                                                                                                                        |
+| Loop                   | 0 plays the sequence once. Any other number restarts the whole sequence that many seconds after it finishes. GitHub starts SVG animation at page load, not when the reader scrolls to it, so a one-shot intro is usually over before anyone sees it. |
+| Move up / down         | Reorders capsules on the page. Order sets the numbering in the README snippet.                                                                                                                                                                       |
+| Download capsule-N.svg | Saves the capsule as a standalone SVG.                                                                                                                                                                                                               |
+| Delete                 | Removes the capsule. Deleting the last one empties it instead.                                                                                                                                                                                       |
+
 <br>
 
-## Combine, history, and arrange
-
-| Control | What it does | How to use / key |
-|---|---|---|
-| Bite | The selected shape punches its own outline out of every shape it overlaps | Overlap, click Bite (`B`), move away. The cut belongs to the bitten shape and travels with it. Fills cut cleanly, strokes do not trace the cut. Text cannot bite |
-| Clear bites | Removes every cut the selected shape has received | Click, or `N` |
-| Undo / Redo | 60 steps. Drags and nudges collapse into one step | `Ctrl+Z` / `Ctrl+Y`, and `Ctrl+Shift+Z` also redoes |
-| Center horiz. / Center vert. | Centers the shape in the capsule | Click, or `C` / `V` |
-| Bring forward / Send back | Moves the shape one step through the stack | Click, or `]` / `[`. Later in the stack draws on top |
-| Duplicate | Copies the shape 20px down and to the right | Click, or `D` |
-| Delete | Deletes the selection | Click, or `Del` |
-| Section arrows | Reorders the four panel sections in their grid | Click the arrows in a section header |
+---
 <br>
 
-## Multi-select panel
+### Canvas and mouse
 
-Shown when two or more shapes are selected.
+| Action               | What it does                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Click                | Selects a shape. Shift-click adds to the selection. Alt-click cycles down a stack of overlapping shapes.   |
+| Drag on empty canvas | Marquee select. Anything it touches is selected.                                                           |
+| Drag a shape         | Moves it, or the whole selection as one.                                                                   |
+| Corner handle        | Resize. On text, drag down to grow the font. Lines stay straight, and Shift locks them to 45 degree steps. |
+| Arrows               | Nudge 1 px. Shift-arrows nudge 10 px.                                                                      |
 
-| Control | What it does | How to use / key |
-|---|---|---|
-| + delay, + duration, + exit delay, + exit duration, then Apply | Adds the value to each shape's own value, so an existing stagger survives | Type a number, click Apply. Negatives work: -0.5 pulls a whole sequence earlier without flattening it |
-| Unite | Fuses the selection into one compound shape | Click, or `G`. Needs two or more non-text shapes. The result inherits the first shape's fill and animation |
-| Hide | Hides everything selected | Click, or `H` |
-| Delete | Deletes everything selected | Click, or `Del` |
 <br>
 
-## Keys
+---
+<br>
+
+### Element panel
+
+Shows the controls that apply to the selected shape.
+
+| Control        | What it does                                                       |
+| -------------- | ------------------------------------------------------------------ |
+| Text           | The string. Editing refits the box.                                |
+| Fill / Stroke  | Color pick, or type a hex. Type `none` for no paint.               |
+| Outline        | Stroke width. Draw entrances need a stroke to draw.                |
+| Corner radius  | Rectangles only. Pills are the radius maxed.                       |
+| Font size      | Text only, in px.                                                  |
+| Rotation (deg) | Rotates around the shape's center. Bites rotate with it.           |
+| Hide           | Keeps the shape in the stack but out of the canvas and the export. |
+| Opacity        | 0 to 1. This is the resting value, before any animation.           |
+
+<br>
+
+---
+<br>
+
+### Animation panel
+
+| Control                                 | What it does                                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrance                                | First thing the shape does: fade, zoom, bounce, four slides, draw, typing, or any of the seven loops. Draw needs a stroke. Typing needs a text element. |
+| Delay (s)                               | Wait before the entrance starts. Stagger delays across shapes to make a capsule read as a sequence.                                                     |
+| Duration (s)                            | How long the entrance takes.                                                                                                                            |
+| Iterations                              | For a loop entrance: 0 repeats forever, any other number runs that many passes.                                                                         |
+| Exit + exit delay, duration, iterations | Same options, played on the way out. Exit delay is absolute, counted from zero.                                                                         |
+| Second color                            | The color the color pulse swings to.                                                                                                                    |
+| Blinking caret                          | Typing only. On by default.                                                                                                                             |
+
+<br>
+
+---
+<br>
+
+### Combine, history, and arrange
+
+| Control                   | What it does                                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Bite                      | Punches the selected shape's outline out of every shape it overlaps. The cut belongs to the bitten shape and travels with it. Fills cut cleanly, strokes do not trace the cut. |
+| Overlap                   | Two duplicates offset by a step, for quick layered looks.                                                                                                                      |
+| Undo / Redo               | 60 steps. Drags and nudges collapse into one step.                                                                                                                             |
+| Center horiz / vert       | Centers the shape in the capsule.                                                                                                                                              |
+| Bring forward / Send back | Moves the shape one step through the stack.                                                                                                                                    |
+| Duplicate                 | Copies the shape 20 px down and to the right.                                                                                                                                  |
+| Delete                    | Deletes the selection.                                                                                                                                                         |
+| Section arrows            | Reorders the panel sections. The layout is saved in the project file.                                                                                                          |
+
+<br>
+
+---
+<br>
+
+### Multi-select panel
+
+_Visible when two or more shapes are selected._
+
+With more than one shape selected, `+ delay`, `+ duration`, and `+ exit duration` add the typed value to each shape, so an existing stagger is the base, not 0.<br>
+<sub>Negatives work. Unite fuses the selection into one compound shape. Center, forward, back, duplicate, bite, and clear bites need exactly one shape selected, and with a multi-selection they do nothing.</sub>
+<br>
+
+| Control                                                        | What it does                                                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| + delay/+ duration/+ exit delay/+ exit duration | Adds the value to each shape's own value. |
+| Unite                                                          | Fuses the selection into one compound shape                               |
+| Hide                                                           | Hides everything selected                                                 |
+| Delete                                                         | Deletes everything selected                                               |
+
+
+
+<br>
+
+---
+<br>
+
+### Keys
 
 Rebindable defaults, changeable in the Shortcuts panel:
 
-| Key | Action |
-|---|---|
-| `B` | Bite |
-| `N` | Clear bites |
-| `G` | Unite |
-| `H` | Hide |
-| `S` | Show hidden |
-| `D` | Duplicate |
-| `]` / `[` | Bring forward / Send back |
+| Key       | Action                           |
+| --------- | -------------------------------- |
+| `B`       | Bite                             |
+| `N`       | Clear bites                      |
+| `G`       | Unite                            |
+| `H`       | Hide                             |
+| `S`       | Show hidden                      |
+| `D`       | Duplicate                        |
+| `[` / `]` | Send back / Bring forward        |
 | `C` / `V` | Center horizontally / vertically |
 
+<br>
 Fixed, not rebindable:
 
-| Key | Action |
-|---|---|
-| Arrows | Nudge 1px |
-| Shift + arrows | Nudge 10px |
-| `Del` or `Backspace` | Delete the selection |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| Alt + click | Cycle down a stack of shapes |
+| Key                  | Action                       |
+| -------------------- | ---------------------------- |
+| Arrows               | Nudge 1px                    |
+| Shift + arrows       | Nudge 10px                   |
+| `Del` or `Backspace` | Delete the selection         |
+| `Ctrl+Z` / `Ctrl+Y`  | Undo / redo                  |
+| Alt + click          | Cycle down a stack of shapes |
 
-Single keys never fire while the cursor is in a field, so they cannot eat text.
+<br>
+
+---
+<br>
+
+## Compatibility
+
+|              |                                                                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Motion       | SMIL, not CSS keyframes. CSS animation on SVG text and CSS filter on SVG are unreliable in mobile Safari.                           |
+| Static state | The unanimated markup is the finished image. A renderer that ignores motion shows the correct picture, not a blank or a half-state. |
+| Dependencies | None in the export. No scripts, no external requests, no web fonts.                                                                 |
+
+Verified on desktop Chrome and Firefox, and on iOS Safari 16 and 18.
+
+<br>
+
+---
 <br>
 
 ## Seven things the buttons do not tell you
 
 1. Exit delay is absolute, counted from zero, not from the moment the entrance ends. If the entrance is delay 2 plus duration 1, any exit delay under 3 collides with it.
-2. "Anim: off" is a preview freeze. The exported SVG still animates.
+2. Anim: off is a preview of the still image. The exported SVG still animates.
 3. The preview background is not exported. The SVG is transparent, which is why the light and dark toggle exists.
-4. Bite is directional. The selected shape is the knife, and the shapes it overlaps keep the cut. "Clear bites" clears cuts the selected shape received, not cuts it gave.
-5. `project.json` is the only reopenable format. Save it before closing the tab.
-6. Center, forward, back, duplicate, bite, and clear bites need exactly one shape selected. With a multi-selection they do nothing and say nothing.
-7. Every export carries a `prefers-reduced-motion` rule, so the animation turns itself off for readers who have asked for that.
+4. Bite is directional. The selected shape is the knife, and the shapes it overlaps keep the cut. Clear bites clears cuts the selected shape received, not cuts it gave.
+5. project.json is the only reopenable format. Save it before closing the tab.
+6. Loop rewrites every one-shot into one long repeating cycle, so a looped capsule never technically finishes. If you need a true play-once intro, leave Loop at 0.
+7. Every export carries a prefers-reduced-motion rule, so where the browser honors it, the animation turns itself off for readers who have asked for that.
+
+<br>
 
 ## License
 
 MIT. Take it, fork it, ship it.
+
+
+
