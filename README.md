@@ -1,4 +1,4 @@
-# Foundry Studio
+# FoundryStudio
 
 Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no dependencies, everything you export you own.
 
