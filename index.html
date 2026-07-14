@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   ============================================================
-  Foundry Studio (v5)
+  FoundryStudio (v5)
   A single-file, offline visual designer for GitHub-ready SVGs.
   ============================================================
 
@@ -81,7 +81,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Foundry Studio</title>
+<title>FoundryStudio</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --border:#30363d;
@@ -885,7 +885,7 @@ function buildSVG(c){
   let body = cap.els.map((e, i) => elSVG(e, c, i, true)).filter(Boolean).join('\n  ');
   if(cap.loop > 0) body = cycleSMIL(body, +cap.loop);
   return `<svg viewBox="0 0 ${cap.w} ${cap.h}" width="${cap.w}" height="${cap.h}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img">
-<!-- Made with Foundry Studio. No script, no CSS animation, no external
+<!-- Made with FoundryStudio. No script, no CSS animation, no external
      request. Motion is SMIL, which the SVG engine runs itself, so it
      survives mobile Safari, where CSS keyframes on SVG text and CSS
      filter on SVG do not. Delete every animation element below and the
