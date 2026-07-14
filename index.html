@@ -114,9 +114,9 @@
   .grp{display:flex;gap:6px;flex-wrap:wrap;align-items:center;
     padding:7px 11px 7px 9px;border:1px solid var(--border);
     border-left:3px solid var(--g);border-radius:10px;background:#11161d}
-  .grp[data-g=add]{--g:#3fb950}
-  .grp[data-g=project]{--g:#f778ba}
-  .grp[data-g=export]{--g:#58a6ff}
+  .grp[data-g=add]{--g:#f778ba}
+  .grp[data-g=project]{--g:#58a6ff}
+  .grp[data-g=export]{--g:#3fb950}
   .grp .glab{font:700 10px var(--mono);letter-spacing:.14em;color:var(--g);margin-right:3px}
   button{background:var(--panel);color:var(--text);border:1px solid var(--border);
     border-radius:6px;padding:6px 10px;font:600 12px var(--mono);cursor:pointer}
@@ -408,7 +408,7 @@ function makeEl(type){
   if(type==='text') fitText(base);
   return base;
 }
-function makeCap(){ return { w:760, h:200, els:[], anim:true }; }
+function makeCap(){ return { w:760, h:200, els:[], anim:true, loop:0 }; }
 function fitText(e){
   e.stepW = Math.max(1, Math.round(e.fs * 0.62));
   e.w = Math.max(20, e.stepW * (e.text||' ').length);
@@ -750,12 +750,140 @@ function defsFor(c){
 }
 
 /* ==============================================================
+   SEQUENCE LOOP
+   GitHub starts SVG animation the moment the page loads, not when
+   the reader scrolls the image into view. A one-shot intro is
+   usually finished before anyone is looking at it, which is how a
+   working animation still reads as broken on a phone. Loop > 0
+   rewrites every one-shot into one long cycle: play, hold the
+   finished state for `gap` seconds, restart. Each animation keeps
+   its own delay, duration and easing inside the cycle, and the
+   base attributes still hold the finished state, so the static
+   fallback is untouched.
+   ============================================================== */
+function cycleSMIL(markup, gap){
+  /* Rewrites every one-shot (fill="freeze") and finite-count loop
+     into one repeating cycle: play, hold the finished state for
+     `gap` seconds, restart.
+
+     THE MERGE MATTERS. SMIL resolves two animations on the same
+     attribute by the sandwich model: the later-priority one simply
+     replaces the other while active. Cycling an entrance AND an
+     exit on the same attribute makes both active for the whole
+     cycle, so the exit's leading hold (the resting value) masks
+     the entrance forever: the outro plays, the intro never runs
+     again. So all one-shot <animate> siblings that target the same
+     attribute are merged into ONE timeline per attribute.
+     <animateTransform> is exempt: those are additive="sum", they
+     stack instead of fighting, and each entrance ends on its
+     identity value, so they cycle independently. */
+  const isOneShot = n => n.getAttribute('fill') === 'freeze' ||
+    /^[\d.]+$/.test(n.getAttribute('repeatCount') || '');
+  const repsOf = n => n.getAttribute('fill') === 'freeze'
+    ? 1 : Math.max(1, Math.round(parseFloat(n.getAttribute('repeatCount'))));
+
+  const doc = new DOMParser().parseFromString(
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">${markup}</svg>`,
+    'image/svg+xml');
+  if(doc.querySelector('parsererror')) return markup;  /* never make it worse */
+
+  const anims = Array.from(doc.querySelectorAll('animate, animateTransform')).filter(isOneShot);
+  if(!anims.length) return markup;
+
+  let end = 0;
+  anims.forEach(n => { end = Math.max(end,
+    parseFloat(n.getAttribute('begin')||'0') +
+    parseFloat(n.getAttribute('dur')||'0') * repsOf(n)); });
+  if(end <= 0) return markup;
+  const T = r4(end + gap);
+
+  /* one-shot -> absolute keyframes [{t, v, s}], s = spline of the
+     segment ENDING at this point. Finite loops unroll; repetition
+     boundaries keep both points so non-closed loops (spin 0 to 360)
+     snap back in a zero-length segment. */
+  const expand = n => {
+    const b  = parseFloat(n.getAttribute('begin')||'0');
+    const d  = parseFloat(n.getAttribute('dur')||'0');
+    const vals = n.getAttribute('values').split(';');
+    const kts  = n.getAttribute('keyTimes').split(';').map(Number);
+    const ksIn = n.getAttribute('keySplines');
+    const sp   = ksIn ? ksIn.split(';') : null;
+    const pts = [];
+    for(let r = 0; r < repsOf(n); r++)
+      kts.forEach((k, i) => pts.push({
+        t: b + (r + k) * d, v: vals[i],
+        s: i === 0 ? LIN : (sp ? sp[i-1] : LIN)
+      }));
+    return { pts, spline: !!sp };
+  };
+
+  /* keyframes -> attributes of one cycled animation */
+  const rewrite = (n, pts, spline) => {
+    const out = [];
+    if(pts[0].t > 1e-6) out.push({ t:0, v:pts[0].v, s:LIN });  /* hold before */
+    pts.forEach(p => out.push(p));
+    if(out[out.length-1].t < T - 1e-6)
+      out.push({ t:T, v:out[out.length-1].v, s:LIN });          /* hold after  */
+    const kts = out.map(p => r4(Math.min(p.t / T, 1)));
+    kts[0] = 0; kts[kts.length-1] = 1;
+    for(let i = 1; i < kts.length; i++) if(kts[i] < kts[i-1]) kts[i] = kts[i-1];
+    ['begin','dur','values','keyTimes','keySplines','calcMode','fill','repeatCount']
+      .forEach(a => n.removeAttribute(a));
+    n.setAttribute('begin', '0s');
+    n.setAttribute('dur', `${T}s`);
+    n.setAttribute('values', out.map(p => p.v).join(';'));
+    n.setAttribute('keyTimes', kts.join(';'));
+    if(spline){
+      n.setAttribute('calcMode', 'spline');
+      n.setAttribute('keySplines', out.slice(1).map(p => p.s || LIN).join(';'));
+    }
+    n.setAttribute('repeatCount', 'indefinite');
+  };
+
+  /* transforms: cycle each on its own. plain animates: group by
+     parent element + attribute, merge in begin order. */
+  const groups = new Map();
+  anims.forEach(n => {
+    if(n.tagName.toLowerCase() === 'animatetransform'){
+      const e = expand(n); rewrite(n, e.pts, e.spline); return;
+    }
+    if(!groups.has(n.parentNode)) groups.set(n.parentNode, new Map());
+    const byAttr = groups.get(n.parentNode);
+    const key = n.getAttribute('attributeName');
+    if(!byAttr.has(key)) byAttr.set(key, []);
+    byAttr.get(key).push(n);
+  });
+  groups.forEach(byAttr => byAttr.forEach(list => {
+    list.sort((a, b) =>
+      parseFloat(a.getAttribute('begin')||'0') - parseFloat(b.getAttribute('begin')||'0'));
+    const ex = list.map(expand);
+    const pts = [];
+    ex.forEach((e, i) => {
+      if(i > 0){
+        const prev = pts[pts.length-1], first = e.pts[0];
+        /* hold the previous end value up to the next begin, then a
+           zero-length jump onto the next animation's first value */
+        if(first.t > prev.t + 1e-6 && first.v !== prev.v)
+          pts.push({ t: first.t, v: prev.v, s: LIN });
+      }
+      e.pts.forEach(p => pts.push(p));
+    });
+    rewrite(list[0], pts, ex.some(e => e.spline));
+    list.slice(1).forEach(n => n.parentNode.removeChild(n));
+  }));
+
+  const s = new XMLSerializer().serializeToString(doc.documentElement);
+  return s.slice(s.indexOf('>') + 1, s.lastIndexOf('</'));
+}
+
+/* ==============================================================
    EXPORT
    ============================================================== */
 function buildSVG(c){
   const cap = caps[c];
   const defs = defsFor(c);
-  const body = cap.els.map((e, i) => elSVG(e, c, i, true)).filter(Boolean).join('\n  ');
+  let body = cap.els.map((e, i) => elSVG(e, c, i, true)).filter(Boolean).join('\n  ');
+  if(cap.loop > 0) body = cycleSMIL(body, +cap.loop);
   return `<svg viewBox="0 0 ${cap.w} ${cap.h}" width="${cap.w}" height="${cap.h}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img">
 <!-- Made with Foundry Studio. No script, no CSS animation, no external
      request. Motion is SMIL, which the SVG engine runs itself, so it
@@ -822,6 +950,7 @@ function rebuildAll(){
         <label class="hint">W <input type="number" data-cw="${c}" value="${cap.w}"></label>
         <label class="hint">H <input type="number" data-ch="${c}" value="${cap.h}"></label>
         <button data-act="anim" data-cap="${c}">Anim: ${cap.anim?'on':'off'}</button>
+        <label class="hint" title="0 = play once. Any other number restarts the whole sequence that many seconds after it finishes. GitHub starts SVG animation at page load, not when the reader scrolls to it, so a one-shot intro is usually over before anyone sees it.">Loop <input type="number" min="0" step="0.5" data-cl="${c}" value="${cap.loop||0}">s</label>
         <button data-act="up" data-cap="${c}">Move up</button>
         <button data-act="down" data-cap="${c}">Move down</button>
         <button data-act="dl" data-cap="${c}">Download capsule-${c+1}.svg</button>
@@ -886,8 +1015,9 @@ function paintCanvas(c){
       });
     }
   }
-  svg.innerHTML = `<style>${RMCSS}</style><defs>${defsFor(c)}</defs>` +
-    cap.els.map((e,i)=>elSVG(e,c,i,on)).join('') + handles;
+  let inner = cap.els.map((e,i)=>elSVG(e,c,i,on)).join('');
+  if(on && cap.loop > 0) inner = cycleSMIL(inner, +cap.loop);
+  svg.innerHTML = `<style>${RMCSS}</style><defs>${defsFor(c)}</defs>` + inner + handles;
   /* SMIL runs on the SVG root's own clock, and that clock does not
      reset when we swap innerHTML. Rewind it, so every repaint replays
      from zero the way the CSS version did. */
@@ -1345,6 +1475,7 @@ stages.addEventListener('input', ev => {
   const t = ev.target;
   if(t.dataset.cw !== undefined){ caps[+t.dataset.cw].w = +t.value || 100; paintCanvas(+t.dataset.cw); }
   if(t.dataset.ch !== undefined){ caps[+t.dataset.ch].h = +t.value || 60; paintCanvas(+t.dataset.ch); }
+  if(t.dataset.cl !== undefined){ caps[+t.dataset.cl].loop = Math.max(0, +t.value || 0); paintCanvas(+t.dataset.cl); }
 });
 
 document.querySelectorAll('[data-add]').forEach(b =>
@@ -1392,6 +1523,7 @@ $('loadfile').addEventListener('change', ev => {
       if(d.els) caps = [{ w:d.canvas?d.canvas.w:760, h:d.canvas?d.canvas.h:200, els:d.els }];
       caps.forEach(cap => {
         if(cap.anim===undefined) cap.anim = true;
+        if(cap.loop===undefined) cap.loop = 0;
         cap.els.forEach(e => {
           const d2 = { bites:[], rot:0, color2:'#58a6ff', iter:0, caret:true,
             exit:'none', exitDelay:3, exitDur:0.8, exitIter:0, hide:false };
