@@ -1,0 +1,17 @@
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Editor
+.vscode/
+.idea/
+
+# Cline
+.clinerules
+
+# OS
+.DS_Store
+Thumbs.db
+
