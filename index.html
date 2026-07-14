@@ -1,73 +1,80 @@
 <!doctype html>
 <!--
   ============================================================
-  Foundry Studio (v4)
+  Foundry Studio (v5)
   A single-file, offline visual designer for GitHub-ready SVGs.
   ============================================================
 
-  NEW IN v4
-    EXIT = FULL SLOT - the Exit dropdown now carries everything
-        Entrance has: all the outs, all the loops (with their
-        own iteration count), and "undraw" (draw stroke in
-        reverse). Fade in, then wobble forever? One element.
-    MULTI MOVE/RESIZE - a multi-selection drags as one, and has
-        a single corner handle that scales the whole selection
-        proportionally. (Rotation is ignored during group
-        resize; resize rotated shapes individually.)
-    ALT+CLICK CYCLING - clicking through a stack of shapes now
-        only happens while Alt is held; a plain click always
-        selects the top shape. (v3's always-cycle slowed real
-        work, per field report.)
-    SHORTCUTS - editable single-key bindings for the workflow
-        buttons, shown greyed next to each button. They only
-        fire when you are not typing in a field, so they can
-        never eat text input. Arrow keys nudge the selection
-        1px, Shift+Arrow 10px. The Shortcuts panel lists every
-        binding, marks tap vs hold, and lets you retype the key
-        to change it. Bindings save inside project.json.
-    GUIDES - toggleable alignment lines: while dragging, the
-        selection snaps to the canvas center and to other
-        shapes' centers when within 5px, with pink guide lines
-        showing what it snapped to.
-    LAYOUT - Flip layout swaps the canvas column and the panel
-        column. The four panel sections can be reordered inside
-        their 2x2 grid with the arrows in each section header.
-        Export moved to the top bar (it kept getting pushed
-        below the fold by new capsules). Undo/Redo moved into
-        the panel grid ("COMBINE + HISTORY"). Show hidden lives
-        next to Hide. Multi-select gains +exit delay and +exit
-        duration.
+  WHAT CHANGED IN v5, AND WHY IT IS THE WHOLE POINT
 
-  BUGS FIXED (v3 field testing)
-    1. One capsule's Anim toggle froze ALL capsules. Cause
-       worth remembering: a <style> element inside an inline
-       SVG is NOT scoped to that SVG - it applies to the whole
-       document. The per-element rules never collided because
-       their class names carry the capsule index, but the
-       animation-off rule was a bare * wildcard. It is now
-       scoped to its own svg[data-cap] selector.
-    2. Text ignored transform exits (zoom out etc). Cause: text
-       with a typing entrance took an early code path that only
-       understood "untype" and silently dropped other exits.
-       animCSS now builds clip rules and node rules
-       independently, so text can type in AND zoom out.
-    3. Undo/redo dropped the selection highlight. Snapshots now
-       store the selection alongside the state and restore it.
+  Field results from two iPhones, same two SVGs:
 
-  HOW BITE WORKS / ROTATION MODEL / UNDO MODEL: unchanged from
-  v3; see rotPt(), elSVG(), snap(). Bites are masks (fills
-  perfect, strokes do not trace the cut). Rotation lives on a
-  wrapper <g> so CSS transform animations cannot overwrite it.
-  Undo restores whole-project snapshots.
+    iPhone 11 (Safari 18)  shapes animate, text animates,
+                           the hue colour loop on the text
+                           renders nothing at all.
+    iPhone 8  (Safari 16)  shapes animate, and the text either
+                           never appears (slide) or freezes on
+                           the first keyframe, sixty pixels above
+                           where it belongs (bounce).
+
+  Shapes were fine on both. Only <text> broke, and only in
+  WebKit. That is not a bad preset, that is a bad mechanism: CSS
+  keyframes on SVG child elements, and CSS filter on SVG, are not
+  dependable on iOS. So v5 stops using them.
+
+  Motion is now SMIL: <animate> and <animateTransform>. The SVG
+  engine runs SMIL itself instead of handing it to the CSS
+  animation pipeline, which is why it survives phones. It is the
+  same mechanism the widely-used README typing SVGs run on.
+
+  THREE RULES THE EXPORTER NEVER BREAKS
+
+  1. THE STATIC STATE IS THE FINISHED STATE. Every attribute in
+     the file holds its resting value: full opacity, no transform,
+     dash offset 0, the complete text path. Strip every animation
+     out and the picture is still correct. "Anim: off" in the
+     canvas header now previews exactly that.
+
+  2. ENTRANCE DELAYS LIVE INSIDE THE ANIMATION. An entrance
+     begins at 0s and holds its first value for the delay with
+     keyTimes, instead of waiting on begin="3s". So there is no
+     window in which a renderer can paint the finished state while
+     an element "waits its turn". That window was the mobile flash.
+
+  3. NOTHING IS ANIMATED ON THE SHAPE ITSELF. Transform and
+     opacity ride a wrapper <g>. Scale and rotate get a static
+     translate(cx,cy) / translate(-cx,-cy) pair around them, so
+     they turn about the element centre without transform-box or
+     transform-origin, neither of which is trustworthy on old
+     WebKit.
+
+  ALSO GONE
+    filter:hue-rotate  -> the colour loop now animates fill (or
+        stroke, on a line) through the real colour wheel. Renders
+        everywhere, hits the exact colours, and one iteration is
+        one visible iteration.
+    pathLength="1"     -> draw/undraw put the real outline length
+        in stroke-dasharray. If a renderer ignores pathLength,
+        dasharray:1 turns a 39px bar into three hundred dashes.
+        With a real length the worst case is a solid bar.
+    clip-path typing   -> typing is a <textPath> on a line that
+        grows. A glyph is only drawn once it fits, so whole
+        characters appear one at a time. A clip reveals half
+        letters, which is why the old one looked like a stroke
+        being drawn.
+    #00000000          -> "none". Eight-digit hex is CSS Color 4;
+        browsers take it, thumbnail renderers fall back to black.
+
+  UNCHANGED: the bite/mask model, the rotation wrapper, undo
+  snapshots, shortcuts, guides, the project file format (v4
+  projects load and are migrated on the way in).
 
   CODE MAP
-    STATE     - caps[], ac, selArr[], ui{} (flip/order/keymap/
-                guides), undo stacks
-    GEOMETRY  - geom(), rotPt(), hit()
-    ANIM      - animCSS(): entrance + exit slots, loops both
+    STATE     - caps[], ac, selArr[], ui{}, undo stacks
+    GEOMETRY  - geom(), rotPt(), hit(), paint(), outlineLen()
+    ANIM      - timed(), entSMIL(), exSMIL(), loopSMIL()
     RENDER    - rebuildAll() / paintCanvas(c) / applyUI()
-    POINTER   - marquee, multi-move, multi-resize, guides,
-                Alt+click stack cycling
+    POINTER   - marquee, multi-move, multi-resize, guides
     SHORTCUTS - ACTIONS table, keydown dispatcher, editor panel
 -->
 <html lang="en">
@@ -98,13 +105,30 @@
     main.flip #props{order:0}}
 
   #workwrap{padding:16px 20px;overflow:auto}
-  .bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:stretch}
   .bar span{font:600 11px var(--mono);color:var(--muted);margin-right:2px}
+  /* Toolbar groups. Each cluster gets its own rail colour, its own
+     label, and its own button shape, so ADD / EXPORT / PROJECT stop
+     reading as one long row of identical boxes. Round buttons make
+     a shape, square buttons ship a file. */
+  .grp{display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+    padding:7px 11px 7px 9px;border:1px solid var(--border);
+    border-left:3px solid var(--g);border-radius:10px;background:#11161d}
+  .grp[data-g=add]{--g:#f778ba}
+  .grp[data-g=project]{--g:#58a6ff}
+  .grp[data-g=export]{--g:#3fb950}
+  .grp .glab{font:700 10px var(--mono);letter-spacing:.14em;color:var(--g);margin-right:3px}
   button{background:var(--panel);color:var(--text);border:1px solid var(--border);
     border-radius:6px;padding:6px 10px;font:600 12px var(--mono);cursor:pointer}
   button:hover{border-color:var(--accent)}
   button:disabled{opacity:.4;cursor:default}
   button.primary{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  .grp[data-g=add] button{border-radius:999px}
+  .grp[data-g=export] button{border-radius:3px}
+  .grp button:hover{border-color:var(--g);color:var(--g)}
+  .grp button.primary{background:var(--g);border-color:var(--g);color:#0d1117}
+  .grp button.primary:hover{color:#0d1117}
+  input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
   kbd{font:600 10px var(--mono);color:var(--muted);border:1px solid var(--border);
     border-radius:4px;padding:1px 4px;margin-left:5px;opacity:.75}
   input[type=number]{width:58px;background:var(--bg);color:var(--text);
@@ -167,30 +191,36 @@
 <div id="workwrap">
 
   <div class="bar">
-    <span>ADD</span>
-    <button data-add="rect">Rectangle</button>
-    <button data-add="pill">Pill</button>
-    <button data-add="ellipse">Ellipse</button>
-    <button data-add="line">Line</button>
-    <button data-add="tri">Triangle</button>
-    <button data-add="text">Text</button>
-    <span style="margin-left:10px">EXPORT</span>
-    <button id="cpmd">Copy README snippet</button>
-    <button id="cpsvg">Copy active SVG</button>
-    <button id="viewsvg">View code</button>
+    <div class="grp" data-g="add">
+      <span class="glab">ADD</span>
+      <button data-add="rect">Rectangle</button>
+      <button data-add="pill">Pill</button>
+      <button data-add="ellipse">Ellipse</button>
+      <button data-add="line">Line</button>
+      <button data-add="tri">Triangle</button>
+      <button data-add="text">Text</button>
+    </div>
+    <div class="grp" data-g="export">
+      <span class="glab">EXPORT</span>
+      <button id="cpmd">Copy README snippet</button>
+      <button id="cpsvg">Copy active SVG</button>
+      <button id="viewsvg">View code</button>
+    </div>
   </div>
 
   <div class="bar">
-    <span>PROJECT</span>
-    <button id="addcap" class="primary">Add capsule</button>
-    <button id="bgToggle">Preview: dark</button>
-    <button id="replay">Replay</button>
-    <button id="guidesToggle">Guides: on</button>
-    <button id="flip">Flip layout</button>
-    <button id="shortcutsBtn">Shortcuts</button>
-    <button id="save">Save project (.json)</button>
-    <button id="load">Load project</button>
-    <input type="file" id="loadfile" accept=".json" style="display:none">
+    <div class="grp" data-g="project">
+      <span class="glab">PROJECT</span>
+      <button id="addcap" class="primary">Add capsule</button>
+      <button id="bgToggle">Preview: dark</button>
+      <button id="replay">Replay</button>
+      <button id="guidesToggle">Guides: on</button>
+      <button id="flip">Flip layout</button>
+      <button id="shortcutsBtn">Shortcuts</button>
+      <button id="save">Save project (.json)</button>
+      <button id="load">Load project</button>
+      <input type="file" id="loadfile" accept=".json" style="display:none">
+    </div>
   </div>
 
   <div id="shortcuts">
@@ -200,7 +230,7 @@
   </div>
 
   <div id="stages"></div>
-  <div class="hint">Drag on empty canvas to marquee-select. Shift-click adds to selection. Hold <b>Alt</b> and click to cycle to the shape underneath. Each capsule downloads from its own header.</div>
+  <div class="hint">Drag on empty canvas to marquee-select. Shift-click adds to selection. Hold <b>Alt</b> and click to cycle to the shape underneath. Each capsule downloads from its own header. <b>Anim: off</b> shows the still picture a renderer sees when it ignores motion; that picture has to look finished.</div>
   <pre id="exportout"></pre>
 </div>
 
@@ -270,7 +300,7 @@
           <option value="blink">blink (loop)</option>
           <option value="wobble">wobble (loop)</option>
           <option value="spin">spin (loop)</option>
-          <option value="hue">hue cycle (loop)</option>
+          <option value="hue">color cycle (loop)</option>
           <option value="colorpulse">color pulse (loop)</option>
           <option value="draw">draw stroke</option>
           <option value="typing">typing (text)</option>
@@ -295,7 +325,7 @@
           <option value="blink">blink (loop)</option>
           <option value="wobble">wobble (loop)</option>
           <option value="spin">spin (loop)</option>
-          <option value="hue">hue cycle (loop)</option>
+          <option value="hue">color cycle (loop)</option>
           <option value="colorpulse">color pulse (loop)</option>
         </select></div>
       <div class="prow"><label>Exit delay (s)</label><input type="number" id="pExitDelay" min="0" step="0.1"></div>
@@ -303,6 +333,8 @@
       <div class="prow" id="rowExIter"><label>Exit iterations (0 = forever)</label><input type="number" id="pExitIter" min="0" step="1"></div>
       <div class="prow" id="rowC2"><label>Second color</label><span class="cpair">
         <input type="color" id="pC2"><input type="text" class="hex" id="pC2Hex"></span></div>
+      <div class="prow" id="rowCaret"><label>Blinking caret</label>
+        <input type="checkbox" id="pCaret"></div>
     </div>
 
     <div class="sect" data-sec="combine">
@@ -364,12 +396,12 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
 
 function makeEl(type){
   const base = { id:nextId++, type, x:60, y:60, w:140, h:60,
-    fill:'#f778ba', stroke:'#00000000', strokeW:0, rx:8, rot:0,
+    fill:'#f778ba', stroke:'none', strokeW:0, rx:8, rot:0,
     opacity:1, anim:'none', delay:0, dur:1, iter:0,
     exit:'none', exitDelay:3, exitDur:0.8, exitIter:0,
-    color2:'#58a6ff', bites:[], hide:false };
+    color2:'#58a6ff', caret:true, bites:[], hide:false };
   if(type==='pill')  base.rx = 999;
-  if(type==='line'){ base.h = 0; base.stroke='#f778ba'; base.strokeW=3; base.fill='#00000000'; }
+  if(type==='line'){ base.h = 0; base.stroke='#f778ba'; base.strokeW=3; base.fill='none'; }
   if(type==='tri')   base.w = base.h = 90;
   if(type==='text'){ base.text='Edit me'; base.fs=26; base.h=32; }
   if(type==='group') base.parts = [];
@@ -391,16 +423,51 @@ function rotPt(px, py, cx, cy, deg){
   const dx = px - cx, dy = py - cy;
   return { x: cx + dx*c - dy*s, y: cy + dx*s + dy*c };
 }
-function geom(type, x, y, w, h, rx, attrs){
+/* Eight-digit hex (#RRGGBBAA) is CSS Color 4. Browsers take it.
+   Plenty of the renderers that turn a repo into a preview card do
+   not, and they fall back to black. Nothing leaves here wearing one. */
+function paint(v){
+  const s = String(v == null ? '' : v).trim();
+  if(!s || s === 'none') return 'none';
+  if(/^#[0-9a-f]{8}$/i.test(s))
+    return s.slice(-2).toLowerCase() === '00' ? 'none' : s.slice(0, 7);
+  if(/^#[0-9a-f]{4}$/i.test(s))
+    return s.slice(-1) === '0' ? 'none' : s.slice(0, 4);
+  return s;
+}
+
+/* Real outline length in user units, so draw/undraw can put the
+   true number in stroke-dasharray instead of leaning on
+   pathLength="1". pathLength is the least evenly implemented
+   attribute we were using: where a renderer ignores it,
+   stroke-dasharray:1 turns a 39px bar into three hundred dashes.
+   With a real length the worst case is a correct, solid shape. */
+function outlineLen(type, w, h, rx){
+  const W = Math.abs(w || 0), H = Math.abs(h || 0);
+  let L;
+  switch(type){
+    case 'line':    L = Math.hypot(W, H); break;
+    case 'ellipse': { const a = W/2, b = H/2;
+      L = Math.PI * (3*(a+b) - Math.sqrt((3*a + b) * (a + 3*b))); break; }
+    case 'tri':     L = W + 2*Math.hypot(W/2, H); break;
+    case 'rect': case 'pill': {
+      const r = Math.max(0, Math.min(rx || 0, W/2, H/2));
+      L = 2*(W - 2*r) + 2*(H - 2*r) + 2*Math.PI*r; break; }
+    default:        L = 2*(W + H);
+  }
+  return L > 0.01 ? L : 1;
+}
+function geom(type, x, y, w, h, rx, attrs, kids){
+  const k = kids || '';
   switch(type){
     case 'rect': case 'pill':
-      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(rx, h/2)}" ${attrs}/>`;
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(rx, h/2)}" ${attrs}>${k}</rect>`;
     case 'ellipse':
-      return `<ellipse cx="${x+w/2}" cy="${y+h/2}" rx="${w/2}" ry="${h/2}" ${attrs}/>`;
+      return `<ellipse cx="${x+w/2}" cy="${y+h/2}" rx="${w/2}" ry="${h/2}" ${attrs}>${k}</ellipse>`;
     case 'tri':
-      return `<polygon points="${x+w/2},${y} ${x+w},${y+h} ${x},${y+h}" ${attrs}/>`;
+      return `<polygon points="${x+w/2},${y} ${x+w},${y+h} ${x},${y+h}" ${attrs}>${k}</polygon>`;
     case 'line':
-      return `<line x1="${x}" y1="${y}" x2="${x+w}" y2="${y+h}" ${attrs}/>`;
+      return `<line x1="${x}" y1="${y}" x2="${x+w}" y2="${y+h}" ${attrs}>${k}</line>`;
   }
 }
 function hit(e, px, py){
@@ -412,135 +479,253 @@ function hit(e, px, py){
 }
 
 /* ==============================================================
-   ANIMATION
-   The two slots (Entrance, Exit) are built independently and
-   joined into one animation list. Both understand loops with
-   iteration counts. Clip animations (typing / untype) live on
-   the clip rect; everything else lives on the element node, so
-   text can type in and STILL zoom out (v3 bug 2 fix).
+   ANIMATION (v5) - SMIL, not CSS keyframes. See the file header
+   for the field results that forced this.
+
+   Every entrance ENDS on its identity value (translate 0,0 or
+   scale 1), which is why an entrance, a loop and an exit can all
+   sit on one <g> with additive="sum" and never fight: once the
+   entrance freezes it contributes nothing.
    ============================================================== */
-function loopFrames(name, e){
+const RMCSS = '@media(prefers-reduced-motion:reduce){.fsa{opacity:1 !important;transform:none !important}[stroke-dasharray]{stroke-dashoffset:0 !important}}';
+const EASE   = '.25 .1 .25 1';   /* the CSS "ease" curve   */
+const EASEIO = '.42 0 .58 1';    /* ease-in-out, for loops */
+const LIN    = '0 0 1 1';
+const r4 = n => +(+n).toFixed(4);
+const paintKey = e => e.type === 'line' ? 'stroke' : 'fill';
+const paintVal = e => paint(e.type === 'line' ? e.stroke : e.fill);
+
+/* Spread values across dur, HOLDING the first value for delay
+   seconds first. The wait lives inside the animation instead of
+   in begin=, so there is never a moment where a renderer can
+   paint the element in its finished state while it waits its
+   turn. That moment was the mobile flash. */
+function timed(values, delay, dur, spline){
+  const v = values.map(String), n = v.length - 1, sp = spline || EASE;
+  if(delay > 0){
+    const total = delay + dur, f = r4(delay / total);
+    v.unshift(v[0]);
+    return { dur: r4(total), values: v.join(';'),
+      keyTimes: [0, f].concat(Array.from({length:n}, (_, k) => r4(f + (1-f)*((k+1)/n)))).join(';'),
+      keySplines: [LIN].concat(Array.from({length:n}, () => sp)).join(';') };
+  }
+  return { dur: r4(dur), values: v.join(';'),
+    keyTimes: Array.from({length:n+1}, (_, k) => r4(k/n)).join(';'),
+    keySplines: Array.from({length:n}, () => sp).join(';') };
+}
+const easeAttrs = s => `dur="${s.dur}s" values="${s.values}" keyTimes="${s.keyTimes}" calcMode="spline" keySplines="${s.keySplines}"`;
+const linAttrs  = s => `dur="${s.dur}s" values="${s.values}" keyTimes="${s.keyTimes}"`;
+const ONCE  = 'fill="freeze"';
+const loopN = n => `repeatCount="${n > 0 ? n : 'indefinite'}"`;
+const xform = (type, s, begin, tail) =>
+  `<animateTransform attributeName="transform" type="${type}" additive="sum" begin="${begin}" ${easeAttrs(s)} ${tail}/>`;
+const attr = (name, s, begin, tail) =>
+  `<animate attributeName="${name}" begin="${begin}" ${easeAttrs(s)} ${tail}/>`;
+
+/* The colour loop used to be filter:hue-rotate(). CSS filter on an
+   SVG child renders nothing on any iPhone we tested, and hue-rotate
+   is only a linear approximation of a hue turn anyway, so saturated
+   colours came out muddy. This walks the real colour wheel and
+   animates fill (or stroke, on a line), which is core SVG. */
+function hex2hsl(hex){
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex || '');
+  if(!m) return null;
+  const r = parseInt(m[1],16)/255, g = parseInt(m[2],16)/255, b = parseInt(m[3],16)/255;
+  const mx = Math.max(r,g,b), mn = Math.min(r,g,b), l = (mx+mn)/2;
+  let h = 0, s = 0;
+  if(mx !== mn){
+    const d = mx - mn;
+    s = l > 0.5 ? d/(2-mx-mn) : d/(mx+mn);
+    h = mx === r ? ((g-b)/d + (g < b ? 6 : 0))
+      : mx === g ? ((b-r)/d + 2) : ((r-g)/d + 4);
+    h *= 60;
+  }
+  return { h, s, l };
+}
+function hsl2hex(h, s, l){
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2*l - 1)) * s;
+  const x = c * (1 - Math.abs((h/60) % 2 - 1));
+  const m = l - c/2;
+  const t = h < 60 ? [c,x,0] : h < 120 ? [x,c,0] : h < 180 ? [0,c,x]
+          : h < 240 ? [0,x,c] : h < 300 ? [x,0,c] : [c,0,x];
+  return '#' + t.map(v => Math.round((v+m)*255).toString(16).padStart(2,'0')).join('');
+}
+function hueRamp(hex, steps){
+  const c = hex2hsl(hex);
+  if(!c) return [hex, hex];
+  /* A grey has no hue to turn, so give it one rather than shipping
+     an option that silently does nothing. */
+  const n = steps || 6, s = c.s < 0.1 ? 0.6 : c.s, out = [];
+  for(let i = 0; i <= n; i++) out.push(hsl2hex(c.h + i*360/n, s, c.l));
+  return out;   /* first === last, so the loop closes seamlessly */
+}
+
+function loopSMIL(name, e, begin, dur, iter, out){
+  const B = `${r4(begin)}s`, R = loopN(iter), col = paintVal(e);
   switch(name){
-    case 'pulse':   return `0%,100%{transform:scale(1)}50%{transform:scale(1.07)}`;
-    case 'float':   return `0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}`;
-    case 'blink':   return `0%,100%{opacity:${e.opacity}}50%{opacity:0.15}`;
-    case 'wobble':  return `0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}`;
-    case 'spin':    return `from{transform:rotate(0)}to{transform:rotate(360deg)}`;
-    case 'hue':     return `from{filter:hue-rotate(0)}to{filter:hue-rotate(360deg)}`;
-    case 'colorpulse': return `0%,100%{fill:${e.fill}}50%{fill:${e.color2}}`;
+    case 'pulse':  out.g.push(xform('scale',     timed(['1','1.07','1'],     0, dur, EASEIO), B, R)); break;
+    case 'float':  out.g.push(xform('translate', timed(['0,0','0,-8','0,0'], 0, dur, EASEIO), B, R)); break;
+    case 'wobble': out.g.push(xform('rotate',    timed(['-3','3','-3'],      0, dur, EASEIO), B, R)); break;
+    case 'spin':   out.g.push(xform('rotate',    timed(['0','360'],          0, dur, LIN),    B, R)); break;
+    case 'blink':  out.g.push(attr ('opacity',   timed(['1','0.15','1'],     0, dur, EASEIO), B, R)); break;
+    case 'colorpulse':
+      if(col !== 'none')
+        out.p.push(attr(paintKey(e), timed([col, paint(e.color2), col], 0, dur, EASEIO), B, R));
+      break;
+    case 'hue':
+      if(col !== 'none')
+        out.p.push(attr(paintKey(e), timed(hueRamp(col), 0, dur, LIN), B, R));
+      break;
   }
 }
-function entranceFrames(e){
-  if(LOOPS.includes(e.anim)) return loopFrames(e.anim, e);
+function entSMIL(e, out){
+  const d = Math.max(0, +e.delay || 0), u = Math.max(0.05, +e.dur || 1);
+  const fade = () => out.g.push(attr('opacity', timed(['0','1'], d, u), '0s', ONCE));
   switch(e.anim){
-    case 'fade':    return `from{opacity:0}to{opacity:${e.opacity}}`;
-    case 'zoom':    return `from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:${e.opacity}}`;
-    case 'bounce':  return `0%{transform:translateY(-60px);opacity:0}60%{transform:translateY(8px);opacity:${e.opacity}}80%{transform:translateY(-4px)}100%{transform:none;opacity:${e.opacity}}`;
-    case 'slide-l': return `from{transform:translateX(-50px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
-    case 'slide-r': return `from{transform:translateX(50px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
-    case 'slide-u': return `from{transform:translateY(-40px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
-    case 'slide-d': return `from{transform:translateY(40px);opacity:0}to{transform:none;opacity:${e.opacity}}`;
-    case 'draw':    return `from{stroke-dashoffset:1}to{stroke-dashoffset:0}`;
+    case 'fade':    fade(); break;
+    case 'zoom':    out.g.push(xform('scale',     timed(['0','1'], d, u), '0s', ONCE)); fade(); break;
+    case 'bounce':  out.g.push(xform('translate', timed(['0,-60','0,8','0,-4','0,0'], d, u), '0s', ONCE)); fade(); break;
+    case 'slide-l': out.g.push(xform('translate', timed(['-50,0','0,0'], d, u), '0s', ONCE)); fade(); break;
+    case 'slide-r': out.g.push(xform('translate', timed(['50,0','0,0'],  d, u), '0s', ONCE)); fade(); break;
+    case 'slide-u': out.g.push(xform('translate', timed(['0,-40','0,0'], d, u), '0s', ONCE)); fade(); break;
+    case 'slide-d': out.g.push(xform('translate', timed(['0,40','0,0'],  d, u), '0s', ONCE)); fade(); break;
+    case 'draw':    out.draw = { d, u }; break;   /* needs the outline length */
+    case 'typing':  out.type = { d, u }; break;   /* needs the text path      */
+    default:        if(LOOPS.includes(e.anim)) loopSMIL(e.anim, e, d, u, +e.iter || 0, out);
   }
 }
-function exitFrames(e){
-  if(LOOPS.includes(e.exit)) return loopFrames(e.exit, e);
+function exSMIL(e, out){
+  const d = Math.max(0, +e.exitDelay || 0), u = Math.max(0.05, +e.exitDur || 1);
+  const B = `${r4(d)}s`;
+  /* An exit STARTS from the resting state, so begin= is safe here:
+     whatever a renderer paints before the exit fires is correct. */
+  const fade = v => out.g.push(attr('opacity', timed(v || ['1','0'], 0, u), B, ONCE));
   switch(e.exit){
-    case 'fade':    return `to{opacity:0}`;
-    case 'zoom':    return `to{transform:scale(0);opacity:0}`;
-    case 'bounce':  return `0%{transform:none}30%{transform:translateY(-12px)}100%{transform:translateY(60px);opacity:0}`;
-    case 'slide-l': return `to{transform:translateX(-60px);opacity:0}`;
-    case 'slide-r': return `to{transform:translateX(60px);opacity:0}`;
-    case 'slide-u': return `to{transform:translateY(-50px);opacity:0}`;
-    case 'slide-d': return `to{transform:translateY(50px);opacity:0}`;
-    case 'undraw':  return `from{stroke-dashoffset:0}to{stroke-dashoffset:1}`;
+    case 'fade':    fade(); break;
+    case 'zoom':    out.g.push(xform('scale',     timed(['1','0'], 0, u), B, ONCE)); fade(); break;
+    case 'bounce':  out.g.push(xform('translate', timed(['0,0','0,-12','0,60'], 0, u), B, ONCE)); fade(['1','1','0']); break;
+    case 'slide-l': out.g.push(xform('translate', timed(['0,0','-60,0'], 0, u), B, ONCE)); fade(); break;
+    case 'slide-r': out.g.push(xform('translate', timed(['0,0','60,0'],  0, u), B, ONCE)); fade(); break;
+    case 'slide-u': out.g.push(xform('translate', timed(['0,0','0,-50'], 0, u), B, ONCE)); fade(); break;
+    case 'slide-d': out.g.push(xform('translate', timed(['0,0','0,50'],  0, u), B, ONCE)); fade(); break;
+    case 'undraw':  out.undraw = { d, u }; break;
+    case 'untype':  out.untype = { d, u }; break;
+    default:        if(LOOPS.includes(e.exit)) loopSMIL(e.exit, e, d, u, +e.exitIter || 0, out);
   }
-}
-function animCSS(e, c, i){
-  const cls = `e${c}_${i}`;
-  const nodeList = [];
-  let kf = '', extra = '', clipRule = '';
-
-  if(e.anim!=='none' && e.anim!=='typing'){
-    const loop = LOOPS.includes(e.anim);
-    const count = loop ? (e.iter>0 ? e.iter : 'infinite') : '1';
-    const fill  = loop ? '' : 'both';
-    nodeList.push(`ai${c}_${i} ${e.dur}s ease ${e.delay}s ${count} ${fill}`.trim());
-    kf += `@keyframes ai${c}_${i}{${entranceFrames(e)}}\n`;
-  }
-  if(e.exit!=='none' && e.exit!=='untype'){
-    const loop = LOOPS.includes(e.exit);
-    const count = loop ? (e.exitIter>0 ? e.exitIter : 'infinite') : '1';
-    const fill  = loop ? '' : 'forwards';
-    nodeList.push(`ao${c}_${i} ${e.exitDur}s ease ${e.exitDelay}s ${count} ${fill}`.trim());
-    kf += `@keyframes ao${c}_${i}{${exitFrames(e)}}\n`;
-  }
-  if(e.anim==='draw' || e.exit==='undraw')
-    extra = `.${cls}{stroke-dasharray:1}\n`;
-
-  if(e.type==='text' && (e.anim==='typing' || e.exit==='untype')){
-    const chars = (e.text||' ').length, w = e.stepW ? e.stepW*chars : e.w;
-    const clipList = []; 
-    if(e.anim==='typing'){
-      clipList.push(`ti${c}_${i} ${e.dur}s steps(${chars},end) ${e.delay}s both`);
-      kf += `@keyframes ti${c}_${i}{from{width:0}to{width:${w}px}}\n`;
-    }
-    if(e.exit==='untype'){
-      clipList.push(`to${c}_${i} ${e.exitDur}s steps(${chars},end) ${e.exitDelay}s forwards`);
-      kf += `@keyframes to${c}_${i}{from{width:${w}px}to{width:0}}\n`;
-    }
-    const startOpen = e.anim!=='typing' ? `width:${w}px;` : '';
-    clipRule = `.t${c}_${i}{${startOpen}animation:${clipList.join(',')}}\n`;
-    /* Insurance for renderers that apply the clip late or
-       refuse to animate the clip rect's width (reported on
-       mobile): the text node itself holds opacity 0 until its
-       typing delay elapses, so it can never flash fully formed
-       on page load. Invisible no-op on engines where the clip
-       works correctly. */
-    if(e.anim==='typing' && e.delay > 0){
-      nodeList.push(`tg${c}_${i} ${e.delay}s steps(1,end) both`);
-      kf += `@keyframes tg${c}_${i}{from{opacity:0}to{opacity:${e.opacity}}}\n`;
-    }
-  }
-  const nodeRule = nodeList.length
-    ? `.${cls}{transform-box:fill-box;transform-origin:center;animation:${nodeList.join(',')}}\n` : '';
-  return extra + nodeRule + clipRule + kf;
 }
 
 /* ==============================================================
-   ELEMENT MARKUP (unchanged model: rotation wrapper <g>,
-   animation class + bite mask on the inner node)
+   ELEMENT MARKUP
+   Layers, outside in:
+     <g rotate(...)>          static, only when the shape is rotated
+       <g translate(cx,cy)>   static, only when something scales or spins
+         <g class="fsa">      every transform + opacity animation
+           <g translate(-cx,-cy)>
+             <shape>          colour + stroke-dash animations
+   The shape's own transform is never touched, and no CSS class ever
+   carries motion. That is the part that kept breaking on iOS.
    ============================================================== */
-function elSVG(e, c, i){
+function elSVG(e, c, i, on){
   if(e.hide) return '';
-  const cls = `e${c}_${i}`;
-  const needPL = e.anim==='draw' || e.exit==='undraw';
-  const common = `class="${cls}" fill="${e.fill}" stroke="${e.stroke}" stroke-width="${e.strokeW}" opacity="${e.opacity}"` +
-    (needPL ? ' pathLength="1"' : '') +
-    (e.bites.length ? ` mask="url(#m${c}_${i})"` : '');
-  let inner;
-  if(e.type==='text'){
-    const needClip = e.anim==='typing' || e.exit==='untype';
-    const clip = needClip ? ` clip-path="url(#t${c}_${i}clip)"` : '';
-    inner = `<text x="${e.x}" y="${e.y+e.fs}" font-size="${e.fs}" font-weight="600" font-family="ui-monospace,Menlo,Consolas,monospace" textLength="${e.w}" lengthAdjust="spacingAndGlyphs" ${common}${clip}>${esc(e.text)}</text>`;
-  } else if(e.type==='group'){
-    const pl = needPL ? 'pathLength="1" ' : '';
-    inner = `<g ${common}>` + e.parts.map(p => {
-      const g = geom(p.type, e.x+p.dx, e.y+p.dy, p.w, p.h, p.rx, pl);
+  const out = { g:[], p:[] };
+  if(on !== false){ entSMIL(e, out); exSMIL(e, out); }
+
+  const mask = e.bites.length ? ` mask="url(#m${c}_${i})"` : '';
+  const strk = (e.strokeW > 0 && paint(e.stroke) !== 'none')
+    ? ` stroke="${paint(e.stroke)}" stroke-width="${e.strokeW}"` : '';
+
+  /* Base dashoffset is 0, so a still render shows the shape fully
+     drawn rather than half-drawn or dotted. */
+  const dashFor = (t, w, h, rx) => {
+    if(!out.draw && !out.undraw) return { a:'', k:'' };
+    const L = r4(outlineLen(t, w, h, rx));
+    let k = '';
+    if(out.draw)   k += attr('stroke-dashoffset', timed([L, 0], out.draw.d, out.draw.u), '0s', ONCE);
+    if(out.undraw) k += attr('stroke-dashoffset', timed([0, L], 0, out.undraw.u), `${r4(out.undraw.d)}s`, ONCE);
+    return { a:` stroke-dasharray="${L}"`, k };
+  };
+
+  let pre = '', inner;
+
+  if(e.type === 'text'){
+    const by = e.y + e.fs;   /* baseline */
+    const font = `font-size="${e.fs}" font-weight="600" font-family="ui-monospace,Menlo,Consolas,monospace"`;
+    const common = `${font} fill="${paint(e.fill)}"${strk} opacity="${e.opacity}"${mask}`;
+
+    if(out.type || out.untype){
+      /* TYPING. The text rides a line that grows. A glyph is drawn
+         only once it FITS on the line, so whole characters appear
+         one at a time: that is what reads as typing. A clip-path
+         reveals half-letters, which is why the old one looked like
+         a stroke being drawn, and CSS-animating a clip rect's width
+         is the exact thing WebKit refuses to do.
+         The path is never painted and never transformed, and lives
+         at the root so glyph layout stays in root coordinates. */
+      const id = `ft${c}_${i}`;
+      const full = `M${e.x},${by} h${r4(e.w)}`;
+      const zero = `M${e.x},${by} h0`;
+      let pa = '';
+      if(out.type)
+        pa += `<animate attributeName="d" begin="0s" ${linAttrs(timed([zero, full], out.type.d, out.type.u))} ${ONCE}/>`;
+      if(out.untype)
+        pa += `<animate attributeName="d" begin="${r4(out.untype.d)}s" ${linAttrs(timed([full, zero], 0, out.untype.u))} ${ONCE}/>`;
+      pre = `<path id="${id}" d="${full}" fill="none">${pa}</path>`;
+      inner = `<text ${common}><textPath href="#${id}" xlink:href="#${id}">${esc(e.text)}</textPath>${out.p.join('')}</text>`;
+
+      if(e.caret !== false && out.type){
+        const cw = Math.max(2, Math.round(e.fs * 0.09));
+        const cy0 = r4(e.y + e.fs * 0.16), ch = r4(e.fs * 0.96);
+        let ca = `<animate attributeName="x" begin="0s" ${linAttrs(timed([e.x, r4(e.x + e.w)], out.type.d, out.type.u, LIN))} ${ONCE}/>`;
+        if(out.untype)
+          ca += `<animate attributeName="x" begin="${r4(out.untype.d)}s" ${linAttrs(timed([r4(e.x + e.w), e.x], 0, out.untype.u, LIN))} ${ONCE}/>`;
+        ca += `<animate attributeName="opacity" begin="${r4(out.type.d)}s" dur="1s" values="1;0" keyTimes="0;0.5" calcMode="discrete" repeatCount="indefinite"/>`;
+        inner += `<rect x="${e.x}" y="${cy0}" width="${cw}" height="${ch}" fill="${paint(e.fill)}" opacity="0">${ca}</rect>`;
+      }
+    } else {
+      inner = `<text x="${e.x}" y="${by}" ${common}>${esc(e.text)}${out.p.join('')}</text>`;
+    }
+
+  } else if(e.type === 'group'){
+    /* Each part carries its own dash length, so a united shape still
+       draws itself correctly instead of at one shared speed. */
+    const parts = e.parts.map(p => {
+      const d = dashFor(p.type, p.w, p.h, p.rx);
+      const g = geom(p.type, e.x+p.dx, e.y+p.dy, p.w, p.h, p.rx, d.a.trim(), d.k);
       if(p.rot){
         const pcx = e.x+p.dx+p.w/2, pcy = e.y+p.dy+p.h/2;
         return `<g transform="rotate(${p.rot} ${pcx} ${pcy})">${g}</g>`;
       }
       return g;
-    }).join('') + `</g>`;
+    }).join('');
+    inner = `<g fill="${paint(e.fill)}"${strk} opacity="${e.opacity}"${mask}>${out.p.join('')}${parts}</g>`;
+
   } else {
-    inner = geom(e.type, e.x, e.y, e.w, e.h, e.rx, common);
+    const d = dashFor(e.type, e.w, e.h, e.rx);
+    const common = `fill="${paint(e.fill)}"${strk}${d.a} opacity="${e.opacity}"${mask}`;
+    inner = geom(e.type, e.x, e.y, e.w, e.h, e.rx, common, out.p.join('') + d.k);
+  }
+
+  /* Scale and rotate need a centre. They get one from a static
+     translate pair, not from transform-box + transform-origin,
+     neither of which is dependable on old WebKit. */
+  let node = inner;
+  if(out.g.length){
+    const turns = out.g.some(s =>
+      s.indexOf('type="scale"') > -1 || s.indexOf('type="rotate"') > -1);
+    if(turns){
+      const cx = r4(e.x + e.w/2), cy = r4(e.y + (e.h||0)/2);
+      node = `<g transform="translate(${cx},${cy})"><g class="fsa">${out.g.join('')}` +
+             `<g transform="translate(${r4(-cx)},${r4(-cy)})">${inner}</g></g></g>`;
+    } else {
+      node = `<g class="fsa">${out.g.join('')}${inner}</g>`;
+    }
   }
   if(e.rot){
     const cx = e.x + e.w/2, cy = e.y + (e.h||0)/2;
-    return `<g transform="rotate(${e.rot} ${cx} ${cy})">${inner}</g>`;
+    node = `<g transform="rotate(${e.rot} ${cx} ${cy})">${node}</g>`;
   }
-  return inner;
+  return pre + node;
 }
 function biteMarkup(b, ex, ey){
   const g = geom(b.type, ex+b.dx, ey+b.dy, b.w, b.h, b.rx, 'fill="black"');
@@ -551,21 +736,16 @@ function biteMarkup(b, ex, ey){
   return g;
 }
 function defsFor(c){
-  return caps[c].els.map((e,i) => {
-    let d = '';
-    if(e.type==='text' && (e.anim==='typing' || e.exit==='untype'))
-      d += `<clipPath id="t${c}_${i}clip"><rect class="t${c}_${i}" x="${e.x}" y="${e.y}" width="0" height="${e.fs*1.4}"/></clipPath>`;
-    if(e.bites.length){
-      const bites = e.bites.map(b => {
-        if(b.parts)
-          return b.parts.map(p => biteMarkup(
-            {type:p.type, dx:b.dx+p.dx, dy:b.dy+p.dy, w:p.w, h:p.h, rx:p.rx, rot:b.rot ? b.rot : p.rot},
-            e.x, e.y)).join('');
-        return biteMarkup(b, e.x, e.y);
-      }).join('');
-      d += `<mask id="m${c}_${i}"><rect x="${e.x-2000}" y="${e.y-2000}" width="4000" height="4000" fill="white"/>${bites}</mask>`;
-    }
-    return d;
+  return caps[c].els.map((e, i) => {
+    if(!e.bites.length) return '';
+    const bites = e.bites.map(b => {
+      if(b.parts)
+        return b.parts.map(p => biteMarkup(
+          {type:p.type, dx:b.dx+p.dx, dy:b.dy+p.dy, w:p.w, h:p.h, rx:p.rx, rot:b.rot ? b.rot : p.rot},
+          e.x, e.y)).join('');
+      return biteMarkup(b, e.x, e.y);
+    }).join('');
+    return `<mask id="m${c}_${i}"><rect x="${e.x-2000}" y="${e.y-2000}" width="4000" height="4000" fill="white"/>${bites}</mask>`;
   }).join('');
 }
 
@@ -574,17 +754,17 @@ function defsFor(c){
    ============================================================== */
 function buildSVG(c){
   const cap = caps[c];
-  const css = cap.els.map((e,i)=>animCSS(e,c,i)).filter(Boolean).join('\n');
-  const body = cap.els.map((e,i)=>elSVG(e,c,i)).filter(Boolean).join('\n  ');
-  return `<svg viewBox="0 0 ${cap.w} ${cap.h}" width="${cap.w}" height="${cap.h}" xmlns="http://www.w3.org/2000/svg" role="img">
-<!-- Made with Foundry Studio. Self-contained: no scripts, no
-     external requests. Safe to commit and reference forever. -->
-<style>
-${css}
-@media(prefers-reduced-motion:reduce){*{animation:none !important}}
-</style>
-<defs>${defsFor(c)}</defs>
-  ${body}
+  const defs = defsFor(c);
+  const body = cap.els.map((e, i) => elSVG(e, c, i, true)).filter(Boolean).join('\n  ');
+  return `<svg viewBox="0 0 ${cap.w} ${cap.h}" width="${cap.w}" height="${cap.h}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img">
+<!-- Made with Foundry Studio. No script, no CSS animation, no external
+     request. Motion is SMIL, which the SVG engine runs itself, so it
+     survives mobile Safari, where CSS keyframes on SVG text and CSS
+     filter on SVG do not. Delete every animation element below and the
+     markup is still the finished picture: a renderer that ignores
+     motion shows the right thing, not a blank or a half-state. -->
+<style>${RMCSS}</style>
+${defs ? '<defs>' + defs + '</defs>\n' : ''}  ${body}
 </svg>`;
 }
 function readmeSnippet(){
@@ -665,10 +845,11 @@ function paintCanvas(c){
   const cap = caps[c];
   svg.setAttribute('width', cap.w); svg.setAttribute('height', cap.h);
   svg.setAttribute('viewBox', `0 0 ${cap.w} ${cap.h}`);
-  /* v3 bug 1 fix: a <style> inside inline SVG is DOCUMENT-wide,
-     so the animation-off rule must name its own capsule. */
-  const css = (cap.anim ? cap.els.map((e,i)=>animCSS(e,c,i)).filter(Boolean).join('\n')
-                        : `svg[data-cap="${c}"] *{animation:none !important}`);
+  /* v5: "Anim: off" no longer needs a CSS kill switch. It emits no
+     animation elements at all, so the canvas shows you exactly what a
+     renderer that ignores motion would show. That still picture is the
+     one that has to be right. */
+  const on = !!cap.anim;
   let handles = '';
   if(c===ac){
     selArr.forEach(si => {
@@ -705,8 +886,14 @@ function paintCanvas(c){
       });
     }
   }
-  svg.innerHTML = `<style>${css}</style><defs>${defsFor(c)}</defs>` +
-    cap.els.map((e,i)=>elSVG(e,c,i)).join('') + handles;
+  svg.innerHTML = `<style>${RMCSS}</style><defs>${defsFor(c)}</defs>` +
+    cap.els.map((e,i)=>elSVG(e,c,i,on)).join('') + handles;
+  /* SMIL runs on the SVG root's own clock, and that clock does not
+     reset when we swap innerHTML. Rewind it, so every repaint replays
+     from zero the way the CSS version did. */
+  if(on && typeof svg.setCurrentTime === 'function'){
+    try{ svg.setCurrentTime(0); }catch(err){}
+  }
   stages.querySelectorAll('.cap').forEach((box,i)=>
     box.classList.toggle('active', i===ac));
 }
@@ -727,11 +914,14 @@ function syncPanel(){
   $('rowFs').style.display   = e.type==='text' ? 'flex' : 'none';
   $('rowRx').style.display   = e.type==='rect' ? 'flex' : 'none';
   $('rowC2').style.display   = (e.anim==='colorpulse'||e.exit==='colorpulse') ? 'flex' : 'none';
+  $('rowCaret').style.display = (e.anim==='typing') ? 'flex' : 'none';
   $('rowIter').style.display = LOOPS.includes(e.anim) ? 'flex' : 'none';
   $('rowExIter').style.display = LOOPS.includes(e.exit) ? 'flex' : 'none';
   $('pText').value = e.text||'';
-  $('pFill').value = e.fill.slice(0,7);   $('pFillHex').value = e.fill;
-  $('pStroke').value = (e.stroke||'#000000').slice(0,7); $('pStrokeHex').value = e.stroke;
+  $('pCaret').checked = e.caret !== false;
+  const swatch = v => /^#[0-9a-fA-F]{6}$/.test(v||'') ? v : '#000000';
+  $('pFill').value = swatch(e.fill);      $('pFillHex').value = e.fill;
+  $('pStroke').value = swatch(e.stroke);  $('pStrokeHex').value = e.stroke;
   $('pC2').value = e.color2;              $('pC2Hex').value = e.color2;
   $('pStrokeW').value = e.strokeW; $('pRx').value = e.rx;
   $('pFs').value = e.fs||26; $('pRot').value = e.rot; $('pOp').value = e.opacity;
@@ -743,10 +933,16 @@ function syncPanel(){
 function bindColor(pick, hex, key){
   $(pick).addEventListener('input', () => { const e=cur(); if(!e) return;
     e[key] = $(pick).value; $(hex).value = $(pick).value; paintCanvas(ac); });
+  /* "none" is now a first-class colour. Eight-digit hex is not: it
+     never reaches a file, and it no longer reaches the model either. */
   $(hex).addEventListener('input', () => { const e=cur(); if(!e) return;
     const v = $(hex).value.trim();
-    if(/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)){
-      e[key] = v; $(pick).value = v.slice(0,7); paintCanvas(ac);
+    if(v === 'none'){ e[key] = 'none'; paintCanvas(ac); return; }
+    if(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v)){
+      e[key] = v;
+      $(pick).value = v.length === 4
+        ? '#' + v.slice(1).split('').map(ch => ch + ch).join('') : v;
+      paintCanvas(ac);
     }});
 }
 bindColor('pFill','pFillHex','fill');
@@ -765,6 +961,8 @@ bind('pAnim','anim'); bind('pDelay','delay',1); bind('pDur','dur',1);
 bind('pIter','iter',1); bind('pExit','exit');
 bind('pExitDelay','exitDelay',1); bind('pExitDur','exitDur',1);
 bind('pExitIter','exitIter',1);
+$('pCaret').addEventListener('change', () => { const e=cur(); if(!e) return;
+  snap(); e.caret = $('pCaret').checked; paintCanvas(ac); });
 $('props').addEventListener('focusin', () => snap());
 
 /* ==============================================================
@@ -1195,9 +1393,12 @@ $('loadfile').addEventListener('change', ev => {
       caps.forEach(cap => {
         if(cap.anim===undefined) cap.anim = true;
         cap.els.forEach(e => {
-          const d2 = { bites:[], rot:0, color2:'#58a6ff', iter:0,
+          const d2 = { bites:[], rot:0, color2:'#58a6ff', iter:0, caret:true,
             exit:'none', exitDelay:3, exitDur:0.8, exitIter:0, hide:false };
           for(const k in d2) if(e[k]===undefined) e[k] = d2[k];
+          /* v4 files carry #00000000 for "no paint". Retire it on the
+             way in, so it can never reach a file again. */
+          e.fill = paint(e.fill); e.stroke = paint(e.stroke);
           if(e.type==='text') fitText(e);
         });
       });
