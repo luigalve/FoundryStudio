@@ -7,7 +7,7 @@ Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no depende
 <br>
 <br>
 
-![Alt Text](images/FoundryStudio-intro-Capsule.svg)
+![Alt Text](images/introBanner-FSv5.svg)
 <br>
 
 ## Why
