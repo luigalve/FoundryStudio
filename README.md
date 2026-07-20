@@ -7,7 +7,7 @@ Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no depende
 <br>
 <br>
 
-![FoundryStudio shape animation demo](images/introBanner-FSv5.svg)
+![Animated FoundryStudio banner built with the app itself](images/introBanner-FSv5.svg)
 <br>
 
 ## Why
