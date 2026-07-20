@@ -7,7 +7,7 @@ Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no depende
 <br>
 <br>
 
-![Alt Text](images/introBanner-FSv5.svg)
+![FoundryStudio shape animation demo](images/introBanner-FSv5.svg)
 <br>
 
 ## Why
@@ -28,7 +28,7 @@ Design GitHub-ready animated SVGs in stacked capsules. One HTML file, no depende
 
 **This banner is a test.** FoundryStudio's exporter generated it.<br>
 
-![Alt Text](images/foundry-probe.svg)
+![Six-row animation test banner: slide, fade, color, draw, type, and turn](images/foundry-probe.svg)
 <br>
 
 <sub>All six rows should animate. It restarts itself 2 seconds after it finishes the animation, so you should see it move. The grey labels never move, so a still row is a failed mechanism, not a failed file.</sub>
